@@ -116,7 +116,7 @@ ipcMain.handle('config:get', async () => {
 
 ipcMain.handle('config:save', async (_, nextConfig: Partial<AppRuntimeConfig>) => {
   const current = await loadRuntimeConfig();
-  const settings = normalizeRuntimeConfig({ ...current, ...nextConfig });
+  const settings = normalizeRuntimeConfig({ ...current, ...compactRuntimeConfig(nextConfig) });
   await fs.promises.mkdir(path.dirname(getConfigPath()), { recursive: true });
   await fs.promises.writeFile(getConfigPath(), JSON.stringify(settings, null, 2), 'utf8');
   return toConfigStatus(settings);
@@ -214,6 +214,7 @@ async function readJsonConfigFile(filePath: string): Promise<Partial<AppRuntimeC
 function toConfigStatus(settings: AppRuntimeConfig) {
   return {
     hasMarketauxApiKey: Boolean(settings.marketauxApiKey),
+    hasNewsApiKey: Boolean(settings.newsApiKey),
     hasDeepseekApiKey: Boolean(settings.deepseekApiKey),
     hasAlibabaDashscopeApiKey: Boolean(settings.alibabaDashscopeApiKey),
     defaultOutputDir: path.join(workspaceDir, 'outputs'),
@@ -228,8 +229,10 @@ function normalizeRuntimeConfig(input: Partial<AppRuntimeConfig>): AppRuntimeCon
   return {
     ...DEFAULT_APP_CONFIG,
     marketauxApiKey: cleanOptionalString(input.marketauxApiKey),
+    newsApiKey: cleanOptionalString(input.newsApiKey),
     deepseekApiKey: cleanOptionalString(input.deepseekApiKey),
     alibabaDashscopeApiKey: cleanOptionalString(input.alibabaDashscopeApiKey),
+    newsProviders: normalizeNewsProviders(input.newsProviders),
     deepseekScriptModel: normalizeDeepseekModel(scriptModel),
     deepseekCoverModel: normalizeDeepseekModel(coverModel),
     deepseekScriptTemperature: clampNumber(input.deepseekScriptTemperature, 0, 2, DEFAULT_APP_CONFIG.deepseekScriptTemperature),
@@ -242,6 +245,13 @@ function normalizeRuntimeConfig(input: Partial<AppRuntimeConfig>): AppRuntimeCon
     coverSystemPrompt: cleanString(input.coverSystemPrompt, DEFAULT_APP_CONFIG.coverSystemPrompt),
     coverPromptExtra: cleanString(input.coverPromptExtra, DEFAULT_APP_CONFIG.coverPromptExtra)
   };
+}
+
+function normalizeNewsProviders(value: unknown): string[] {
+  const allowed = new Set(['marketaux', 'newsApi']);
+  const values = Array.isArray(value) ? value.map((item) => String(item)) : DEFAULT_APP_CONFIG.newsProviders;
+  const normalized = values.filter((item) => allowed.has(item));
+  return normalized.length > 0 ? Array.from(new Set(normalized)) : DEFAULT_APP_CONFIG.newsProviders;
 }
 
 function compactRuntimeConfig(input: Partial<AppRuntimeConfig>): Partial<AppRuntimeConfig> {

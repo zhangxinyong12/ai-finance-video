@@ -1,5 +1,6 @@
 export interface AppConfigStatus {
   hasMarketauxApiKey: boolean;
+  hasNewsApiKey: boolean;
   hasDeepseekApiKey: boolean;
   hasAlibabaDashscopeApiKey: boolean;
   defaultOutputDir: string;
@@ -8,8 +9,10 @@ export interface AppConfigStatus {
 
 export interface AppRuntimeConfig {
   marketauxApiKey?: string;
+  newsApiKey?: string;
   deepseekApiKey?: string;
   alibabaDashscopeApiKey?: string;
+  newsProviders: string[];
   deepseekScriptModel: string;
   deepseekCoverModel: string;
   deepseekScriptTemperature: number;
@@ -27,6 +30,7 @@ export interface GenerationRequest {
   topic: string;
   maxArticles: number;
   requestRounds: number;
+  maxNewsAgeHours: number;
   durationSeconds: number;
   outputDir: string;
   tone: string;
@@ -40,6 +44,7 @@ export interface NewsArticle {
   snippet?: string;
   url?: string;
   source?: string;
+  provider?: string;
   publishedAt?: string;
   entities?: string[];
   sentiment?: string;

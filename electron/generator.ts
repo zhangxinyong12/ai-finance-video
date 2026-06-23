@@ -8,9 +8,11 @@ export interface AppSecrets {
   marketauxApiKey?: string;
   deepseekApiKey?: string;
   alibabaDashscopeApiKey?: string;
+  newsApiKey?: string;
 }
 
 export interface AppRuntimeConfig extends AppSecrets {
+  newsProviders: string[];
   deepseekScriptModel: string;
   deepseekCoverModel: string;
   deepseekScriptTemperature: number;
@@ -31,6 +33,7 @@ export interface NewsArticle {
   snippet?: string;
   url?: string;
   source?: string;
+  provider?: string;
   publishedAt?: string;
   entities?: string[];
 }
@@ -39,6 +42,7 @@ export interface GenerationRequest {
   topic: string;
   maxArticles: number;
   requestRounds: number;
+  maxNewsAgeHours: number;
   durationSeconds: number;
   outputDir: string;
   tone: string;
@@ -79,6 +83,10 @@ interface MarketauxResponse {
   data?: Array<Record<string, any>>;
 }
 
+interface NewsApiResponse {
+  articles?: Array<Record<string, any>>;
+}
+
 interface SaveResult {
   files: string[];
   coverImagePath: string;
@@ -94,6 +102,14 @@ const BROAD_FINANCE_QUERIES = [
   'global commodities oil gold copper inflation demand',
   'technology industry supply chain earnings capital expenditure',
   'China ADR global trade tariffs manufacturing demand'
+];
+
+const NEWSAPI_FINANCE_QUERIES = [
+  'markets OR stocks OR oil OR Fed',
+  'global markets OR Wall Street OR Treasury yields',
+  'oil OR gold OR dollar OR inflation',
+  'technology earnings OR chips OR AI stocks',
+  'China markets OR global trade OR supply chain'
 ];
 
 const BANNED_OUTPUT_PATTERNS = [
@@ -132,6 +148,7 @@ export const DEFAULT_COVER_PROMPT_EXTRA = [
 ].join('\n');
 
 export const DEFAULT_APP_CONFIG: AppRuntimeConfig = {
+  newsProviders: ['marketaux', 'newsApi'],
   deepseekScriptModel: 'deepseek-v4-pro',
   deepseekCoverModel: 'deepseek-v4-pro',
   deepseekScriptTemperature: 0.45,
@@ -200,18 +217,72 @@ export async function fetchMarketauxNews(
   topic: string,
   maxArticles: number,
   requestRounds: number,
+  maxNewsAgeHours: number,
   apiKey: string
 ): Promise<NewsArticle[]> {
   const queries = buildSearchQueries(topic, requestRounds);
   const perRoundLimit = Math.max(3, Math.min(Math.ceil(maxArticles / queries.length) + 2, 12));
+  const freshnessHours = Math.max(1, Math.min(Number.isFinite(maxNewsAgeHours) ? maxNewsAgeHours : 24, 168));
+  const publishedAfter = new Date(Date.now() - freshnessHours * 60 * 60 * 1000);
   const allArticles: NewsArticle[] = [];
 
   for (let index = 0; index < queries.length; index += 1) {
     progress('news', `Fetching global finance news round ${index + 1}/${queries.length}`, 15 + Math.round((index / queries.length) * 25));
-    allArticles.push(...await fetchMarketauxRound(queries[index], perRoundLimit, apiKey));
+    allArticles.push(...await fetchMarketauxRound(queries[index], perRoundLimit, publishedAfter, apiKey));
   }
 
-  return dedupeArticles(allArticles).slice(0, Math.max(1, Math.min(maxArticles, 40)));
+  return dedupeArticles(allArticles)
+    .filter((article) => isArticleAfter(article, publishedAfter))
+    .slice(0, Math.max(1, Math.min(maxArticles, 40)));
+}
+
+export async function fetchFinanceNews(
+  request: GenerationRequest,
+  config: AppRuntimeConfig
+): Promise<NewsArticle[]> {
+  const freshnessHours = Math.max(1, Math.min(Number.isFinite(request.maxNewsAgeHours) ? request.maxNewsAgeHours : 24, 168));
+  const publishedAfter = new Date(Date.now() - freshnessHours * 60 * 60 * 1000);
+  const providers = new Set(config.newsProviders.length > 0 ? config.newsProviders : DEFAULT_APP_CONFIG.newsProviders);
+  const articles: NewsArticle[] = [];
+  const errors: string[] = [];
+
+  if (providers.has('marketaux') && config.marketauxApiKey) {
+    try {
+      articles.push(...await fetchMarketauxNews(
+        request.topic,
+        request.maxArticles,
+        request.requestRounds,
+        freshnessHours,
+        config.marketauxApiKey
+      ));
+    } catch (error) {
+      errors.push(`Marketaux: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  if (providers.has('newsApi') && config.newsApiKey) {
+    try {
+      articles.push(...await fetchNewsApi(
+        request.topic,
+        request.maxArticles,
+        request.requestRounds,
+        publishedAfter,
+        config.newsApiKey
+      ));
+    } catch (error) {
+      errors.push(`NewsAPI: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  const result = dedupeArticles(articles)
+    .filter((article) => isArticleAfter(article, publishedAfter))
+    .slice(0, Math.max(1, Math.min(request.maxArticles, 40)));
+
+  if (result.length === 0 && errors.length > 0) {
+    throw new Error(`新闻源请求失败或无可用新闻：${errors.join('；')}`);
+  }
+
+  return result;
 }
 
 function buildSearchQueries(topic: string, requestRounds: number): string[] {
@@ -227,7 +298,7 @@ function buildSearchQueries(topic: string, requestRounds: number): string[] {
   return queries;
 }
 
-async function fetchMarketauxRound(search: string, limit: number, apiKey: string): Promise<NewsArticle[]> {
+async function fetchMarketauxRound(search: string, limit: number, publishedAfter: Date, apiKey: string): Promise<NewsArticle[]> {
   const url = new URL('https://api.marketaux.com/v1/news/all');
   url.searchParams.set('api_token', apiKey);
   url.searchParams.set('search', search);
@@ -236,6 +307,7 @@ async function fetchMarketauxRound(search: string, limit: number, apiKey: string
   url.searchParams.set('group_similar', 'true');
   url.searchParams.set('limit', String(limit));
   url.searchParams.set('sort', 'published_at');
+  url.searchParams.set('published_after', formatMarketauxDate(publishedAfter));
 
   const response = await fetch(url);
   if (!response.ok) {
@@ -250,11 +322,84 @@ async function fetchMarketauxRound(search: string, limit: number, apiKey: string
     snippet: item.snippet ? String(item.snippet) : undefined,
     url: item.url ? String(item.url) : undefined,
     source: item.source ? String(item.source) : undefined,
+    provider: 'Marketaux',
     publishedAt: item.published_at ? String(item.published_at) : undefined,
     entities: Array.isArray(item.entities)
       ? item.entities.map((entity: any) => entity.name).filter(Boolean)
       : undefined
   })).filter((item) => item.title);
+}
+
+async function fetchNewsApi(
+  topic: string,
+  maxArticles: number,
+  requestRounds: number,
+  publishedAfter: Date,
+  apiKey: string
+): Promise<NewsArticle[]> {
+  const queries = buildNewsApiQueries(topic, requestRounds);
+  const perRoundLimit = Math.max(3, Math.min(Math.ceil(maxArticles / queries.length) + 3, 10));
+  const allArticles: NewsArticle[] = [];
+
+  for (let index = 0; index < queries.length; index += 1) {
+    progress('news', `Fetching NewsAPI ${index + 1}/${queries.length}`, 28 + Math.round((index / queries.length) * 18));
+    const url = new URL('https://newsapi.org/v2/everything');
+    url.searchParams.set('q', queries[index]);
+    url.searchParams.set('language', 'en');
+    url.searchParams.set('sortBy', 'publishedAt');
+    url.searchParams.set('pageSize', String(perRoundLimit));
+    url.searchParams.set('from', publishedAfter.toISOString());
+
+    const response = await fetchWithTimeout(url.toString(), {
+      headers: {
+        'X-Api-Key': apiKey
+      }
+    }, 20000);
+    if (!response.ok) {
+      throw new Error(`${response.status} ${response.statusText}`);
+    }
+
+    const payload = await response.json() as NewsApiResponse;
+    allArticles.push(...(payload.articles ?? []).map((item) => ({
+      title: String(item.title ?? ''),
+      description: item.description ? String(item.description) : undefined,
+      snippet: item.content ? String(item.content) : undefined,
+      url: item.url ? String(item.url) : undefined,
+      source: item.source?.name ? String(item.source.name) : undefined,
+      provider: 'NewsAPI',
+      publishedAt: item.publishedAt ? String(item.publishedAt) : undefined
+    })).filter((item) => item.title));
+  }
+
+  return allArticles;
+}
+
+function buildNewsApiQueries(topic: string, requestRounds: number): string[] {
+  const rounds = Math.max(1, Math.min(requestRounds, NEWSAPI_FINANCE_QUERIES.length + 1));
+  const topicWords = topic
+    .split(/\s+/)
+    .map((word) => word.trim())
+    .filter((word) => /^[a-zA-Z-]{3,}$/.test(word))
+    .slice(0, 5);
+  const normalizedTopic = topicWords.length > 0 ? topicWords.join(' OR ') : NEWSAPI_FINANCE_QUERIES[0];
+  const queries = [normalizedTopic];
+
+  for (const query of NEWSAPI_FINANCE_QUERIES) {
+    if (queries.length >= rounds) break;
+    if (!queries.includes(query)) queries.push(query);
+  }
+
+  return queries;
+}
+
+function isArticleAfter(article: NewsArticle, publishedAfter: Date): boolean {
+  if (!article.publishedAt) return false;
+  const publishedAt = Date.parse(article.publishedAt);
+  return Number.isFinite(publishedAt) && publishedAt >= publishedAfter.getTime();
+}
+
+function formatMarketauxDate(date: Date): string {
+  return date.toISOString().replace(/\.\d{3}Z$/, '');
 }
 
 function dedupeArticles(articles: NewsArticle[]): NewsArticle[] {
@@ -279,22 +424,14 @@ export async function generateContent(
   request: GenerationRequest,
   config: AppRuntimeConfig
 ): Promise<GeneratedContent> {
-  if (!config.marketauxApiKey) {
-    throw new Error('没有配置 Marketaux API Key。');
-  }
   if (!config.deepseekApiKey) {
     throw new Error('没有配置 DeepSeek API Key。');
   }
 
   progress('news', 'Fetching broad global finance news', 10);
-  const articles = await fetchMarketauxNews(
-    request.topic,
-    request.maxArticles,
-    request.requestRounds,
-    config.marketauxApiKey
-  );
+  const articles = await fetchFinanceNews(request, config);
   if (articles.length === 0) {
-    throw new Error('没有获取到财经新闻，请换一个更宽泛的英文主题，或检查 Marketaux 额度。');
+    throw new Error(`没有获取到最近 ${request.maxNewsAgeHours ?? 24} 小时内的财经新闻，请换一个更宽泛的英文主题，或检查新闻源配置。`);
   }
 
   progress('script', 'Generating compliant Chinese finance analysis', 50);
@@ -365,6 +502,7 @@ function buildPrompt(request: GenerationRequest, articles: NewsArticle[], config
     return [
       `#${index + 1}`,
       `title: ${article.title}`,
+      `provider: ${article.provider ?? ''}`,
       `source: ${article.source ?? ''}`,
       `published_at: ${article.publishedAt ?? ''}`,
       `summary: ${article.description ?? article.snippet ?? ''}`,
@@ -385,6 +523,7 @@ Input topic: ${request.topic}
 Target length: about ${request.durationSeconds} seconds
 Style: ${request.tone}
 News request rounds used: ${request.requestRounds}
+News freshness window: only use sources published within the last ${request.maxNewsAgeHours} hours.
 
 User-configurable content instructions:
 ${(request.contentPrompt ?? configuredContentPrompt).trim() || 'Use the default broad finance news analysis style and compliance rules.'}

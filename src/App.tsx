@@ -3,6 +3,7 @@ import {
   Alert,
   Button,
   Card,
+  Checkbox,
   Col,
   Divider,
   Empty,
@@ -64,6 +65,7 @@ const { Text, Title, Paragraph } = Typography;
 const HISTORY_STORAGE_KEY = 'finance-video-history-v1';
 const API_KEY_LINKS = {
   marketaux: 'https://www.marketaux.com/',
+  newsApi: 'https://newsapi.org/register',
   deepseek: 'https://platform.deepseek.com/api_keys',
   dashscope: 'https://help.aliyun.com/zh/model-studio/developer-reference/get-api-key'
 };
@@ -72,6 +74,7 @@ interface FormValues {
   topic: string;
   maxArticles: number;
   requestRounds: number;
+  maxNewsAgeHours: number;
   durationSeconds: number;
   outputDir: string;
   tone: string;
@@ -96,6 +99,13 @@ const sourceColumns: ColumnsType<NewsArticle> = [
         <Text type="secondary">{record.description ?? record.snippet}</Text>
       </Space>
     )
+  },
+  {
+    title: '平台',
+    dataIndex: 'provider',
+    key: 'provider',
+    width: 130,
+    render: (value?: string) => value || '-'
   },
   {
     title: '来源',
@@ -134,9 +144,14 @@ export default function App() {
   const [previewAssets, setPreviewAssets] = useState<PreviewAssets>({});
   const [assetLoading, setAssetLoading] = useState(false);
 
+  const hasUsableNewsSource = useMemo(() => {
+    const providers = config?.settings.newsProviders ?? [];
+    return (providers.includes('marketaux') && Boolean(config?.hasMarketauxApiKey))
+      || (providers.includes('newsApi') && Boolean(config?.hasNewsApiKey));
+  }, [config]);
   const apiReady = useMemo(
-    () => Boolean(config?.hasMarketauxApiKey && config?.hasDeepseekApiKey && config?.hasAlibabaDashscopeApiKey),
-    [config]
+    () => Boolean(hasUsableNewsSource && config?.hasDeepseekApiKey && config?.hasAlibabaDashscopeApiKey),
+    [config, hasUsableNewsSource]
   );
   const completedItems = useMemo(() => executions.filter((item) => item.status !== 'running'), [executions]);
 
@@ -159,6 +174,7 @@ export default function App() {
       topic: 'broad global finance macro markets liquidity commodities technology supply chain',
       maxArticles: 12,
       requestRounds: 4,
+      maxNewsAgeHours: 24,
       durationSeconds: 60,
       outputDir: configStatus.defaultOutputDir,
       tone: 'Objective, restrained, high-information-density broad finance analysis for mainland Chinese stock-market retail audiences. Explain macro, overseas markets, liquidity, commodities, technology cycle and risk sentiment only. Do not recommend stocks, sectors, tickers, trades, prices or returns.',
@@ -188,7 +204,7 @@ export default function App() {
 
   async function runGeneration(values: FormValues) {
     if (!apiReady) {
-      message.error('请先在“接口与模型”中配置 Marketaux、DeepSeek 和 DashScope API Key');
+      message.error('请先在“接口与模型”中配置可用新闻源、DeepSeek 和 DashScope API Key');
       return;
     }
     if (ffmpeg && !ffmpeg.available) {
@@ -206,6 +222,7 @@ export default function App() {
       topic,
       maxArticles: values.maxArticles,
       requestRounds: values.requestRounds,
+      maxNewsAgeHours: values.maxNewsAgeHours,
       durationSeconds: values.durationSeconds,
       outputDir: values.outputDir,
       tone: values.tone,
@@ -375,17 +392,22 @@ export default function App() {
                       <Input.TextArea rows={4} placeholder="broad global finance macro markets liquidity commodities technology supply chain" />
                     </Form.Item>
                     <Row gutter={12}>
-                      <Col span={8}>
+                      <Col span={6}>
                         <Form.Item name="maxArticles" label="最终新闻数">
                           <InputNumber min={5} max={40} className="full-width" />
                         </Form.Item>
                       </Col>
-                      <Col span={8}>
+                      <Col span={6}>
                         <Form.Item name="requestRounds" label="请求轮次">
                           <InputNumber min={1} max={6} className="full-width" />
                         </Form.Item>
                       </Col>
-                      <Col span={8}>
+                      <Col span={6}>
+                        <Form.Item name="maxNewsAgeHours" label="新闻时效（小时）" extra="股票金融类默认只取最近 24 小时新闻。">
+                          <InputNumber min={1} max={72} className="full-width" />
+                        </Form.Item>
+                      </Col>
+                      <Col span={6}>
                         <Form.Item name="durationSeconds" label="目标秒数">
                           <InputNumber min={30} max={180} className="full-width" />
                         </Form.Item>
@@ -425,6 +447,9 @@ export default function App() {
                         <Statistic title="Marketaux" value={config?.hasMarketauxApiKey ? '已配置' : '缺失'} prefix={<ApiOutlined />} />
                       </Col>
                       <Col span={12}>
+                        <Statistic title="NewsAPI" value={config?.hasNewsApiKey ? '已配置' : '缺失'} prefix={<ApiOutlined />} />
+                      </Col>
+                      <Col span={12}>
                         <Statistic title="DeepSeek" value={config?.hasDeepseekApiKey ? '已配置' : '缺失'} prefix={<CheckCircleOutlined />} />
                       </Col>
                       <Col span={12}>
@@ -454,7 +479,7 @@ export default function App() {
                         type="warning"
                         showIcon
                         message="API Key 未完整读取"
-                        description="请到“接口与模型”里保存 Marketaux、DeepSeek 和 DashScope Key。"
+                        description="请到“接口与模型”里启用至少一个新闻源，并保存 DeepSeek 和 DashScope Key。"
                       />
                     )}
                     {ffmpeg && !ffmpeg.available && (
@@ -477,8 +502,20 @@ export default function App() {
               <Col xs={24} xl={16}>
                 <Card title="接口与模型" className="panel-card">
                   <Form form={configForm} layout="vertical" onFinish={saveRuntimeConfig}>
+                    <Form.Item
+                      name="newsProviders"
+                      label="新闻源"
+                      rules={[{ required: true, message: '请选择至少一个新闻源' }]}
+                    >
+                      <Checkbox.Group
+                        options={[
+                          { label: 'Marketaux', value: 'marketaux' },
+                          { label: 'NewsAPI', value: 'newsApi' }
+                        ]}
+                      />
+                    </Form.Item>
                     <Row gutter={12}>
-                      <Col xs={24} lg={8}>
+                      <Col xs={24} lg={6}>
                         <Form.Item
                           name="marketauxApiKey"
                           label="Marketaux API Key"
@@ -487,7 +524,16 @@ export default function App() {
                           <Input.Password placeholder="用于抓取海外财经新闻" autoComplete="off" />
                         </Form.Item>
                       </Col>
-                      <Col xs={24} lg={8}>
+                      <Col xs={24} lg={6}>
+                        <Form.Item
+                          name="newsApiKey"
+                          label="NewsAPI Key"
+                          extra={<Button type="link" className="inline-link-button" onClick={() => shellAPI.openExternal(API_KEY_LINKS.newsApi)}>申请 NewsAPI Key</Button>}
+                        >
+                          <Input.Password placeholder="用于补充新闻源" autoComplete="off" />
+                        </Form.Item>
+                      </Col>
+                      <Col xs={24} lg={6}>
                         <Form.Item
                           name="deepseekApiKey"
                           label="DeepSeek API Key"
@@ -496,7 +542,7 @@ export default function App() {
                           <Input.Password placeholder="用于生成脚本和封面 HTML" autoComplete="off" />
                         </Form.Item>
                       </Col>
-                      <Col xs={24} lg={8}>
+                      <Col xs={24} lg={6}>
                         <Form.Item
                           name="alibabaDashscopeApiKey"
                           label="DashScope 语音 Key"
@@ -585,6 +631,9 @@ export default function App() {
                         <Statistic title="Marketaux" value={config?.hasMarketauxApiKey ? '已配置' : '缺失'} prefix={<ApiOutlined />} />
                       </Col>
                       <Col span={12}>
+                        <Statistic title="NewsAPI" value={config?.hasNewsApiKey ? '已配置' : '缺失'} prefix={<ApiOutlined />} />
+                      </Col>
+                      <Col span={12}>
                         <Statistic title="DeepSeek" value={config?.hasDeepseekApiKey ? '已配置' : '缺失'} prefix={<CheckCircleOutlined />} />
                       </Col>
                       <Col span={12}>
@@ -597,7 +646,7 @@ export default function App() {
                       type="info"
                       showIcon
                       message="仅保存在用户本地"
-                      description="API Key 只会保存到当前电脑的应用本地配置中，不会上传到我们的云端。生成内容时，Key 仅用于请求 Marketaux、DeepSeek 和 DashScope 对应服务。"
+                      description="API Key 只会保存到当前电脑的应用本地配置中，不会上传到我们的云端。生成内容时，Key 仅用于请求 Marketaux、NewsAPI、DeepSeek 和 DashScope 对应服务。"
                     />
                   </Card>
                 </Space>

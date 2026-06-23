@@ -13,10 +13,12 @@ const fallback = {
   config: {
     get: () => Promise.resolve<AppConfigStatus>({
       hasMarketauxApiKey: false,
+      hasNewsApiKey: false,
       hasDeepseekApiKey: false,
       hasAlibabaDashscopeApiKey: false,
       defaultOutputDir: '',
       settings: {
+        newsProviders: ['marketaux', 'newsApi'],
         deepseekScriptModel: 'deepseek-v4-pro',
         deepseekCoverModel: 'deepseek-v4-pro',
         deepseekScriptTemperature: 0.45,

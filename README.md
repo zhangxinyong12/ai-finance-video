@@ -36,12 +36,14 @@ pnpm run build
 打开应用后进入左侧菜单的“接口与模型”，填写并保存：
 
 - Marketaux API Key：用于抓取海外财经新闻。
+- NewsAPI Key：可选，用于补充新闻源。
 - DeepSeek API Key：用于生成新闻分析脚本和封面 HTML。
 - DashScope 语音 Key：用于生成固定声音口播音频。
 
 申请入口：
 
 - Marketaux: https://www.marketaux.com/
+- NewsAPI: https://newsapi.org/register
 - DeepSeek: https://platform.deepseek.com/api_keys
 - DashScope: https://help.aliyun.com/zh/model-studio/developer-reference/get-api-key
 
@@ -61,6 +63,7 @@ pnpm run build
 ```json
 {
   "marketauxApiKey": "你的 Marketaux Key",
+  "newsApiKey": "你的 NewsAPI Key，可选",
   "deepseekApiKey": "你的 DeepSeek Key",
   "alibabaDashscopeApiKey": "你的 DashScope Key"
 }
@@ -72,6 +75,7 @@ pnpm run build
 
 “接口与模型”页面支持配置：
 
+- 新闻源多选：Marketaux、NewsAPI。
 - DeepSeek 新闻分析/脚本模型，默认 `deepseek-v4-pro`。
 - DeepSeek 封面 HTML 模型，默认 `deepseek-v4-pro`。
 - 脚本温度和封面温度。
