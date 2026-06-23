@@ -152,6 +152,15 @@ ipcMain.handle('asset:getDataUrl', async (_, targetPath: string) => {
   return `data:${mime};base64,${buffer.toString('base64')}`;
 });
 
+ipcMain.handle('asset:deleteOutputDir', async (_, targetPath: string) => {
+  const resolvedPath = path.resolve(String(targetPath ?? ''));
+  const baseName = path.basename(resolvedPath);
+  if (!baseName.startsWith('finance-video-')) {
+    throw new Error('只能删除应用生成的 finance-video-* 输出目录。');
+  }
+  await fs.promises.rm(resolvedPath, { recursive: true, force: true });
+});
+
 function getMimeType(targetPath: string): string {
   const ext = path.extname(targetPath).toLowerCase();
   if (ext === '.png') return 'image/png';

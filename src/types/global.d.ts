@@ -108,6 +108,7 @@ export interface ElectronAPI {
   };
   asset: {
     getDataUrl: (targetPath: string) => Promise<string>;
+    deleteOutputDir: (targetPath: string) => Promise<void>;
   };
   onGenerationProgress: (callback: (event: ProgressEvent) => void) => () => void;
 }

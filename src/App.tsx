@@ -13,6 +13,7 @@ import {
   List,
   Menu,
   Modal,
+  Popconfirm,
   Progress,
   Row,
   Space,
@@ -26,7 +27,7 @@ import {
 import {
   ApiOutlined,
   CheckCircleOutlined,
-  ClockCircleOutlined,
+  DeleteOutlined,
   EyeOutlined,
   FolderOpenOutlined,
   HistoryOutlined,
@@ -115,7 +116,6 @@ const sourceColumns: ColumnsType<NewsArticle> = [
 const menuItems = [
   { key: 'generate', icon: <PlayCircleOutlined />, label: '生成任务' },
   { key: 'settings', icon: <SettingOutlined />, label: '接口与模型' },
-  { key: 'running', icon: <ClockCircleOutlined />, label: '正在执行' },
   { key: 'history', icon: <HistoryOutlined />, label: '历史' }
 ];
 
@@ -138,7 +138,6 @@ export default function App() {
     () => Boolean(config?.hasMarketauxApiKey && config?.hasDeepseekApiKey && config?.hasAlibabaDashscopeApiKey),
     [config]
   );
-  const runningItems = useMemo(() => executions.filter((item) => item.status === 'running'), [executions]);
   const completedItems = useMemo(() => executions.filter((item) => item.status !== 'running'), [executions]);
 
   useEffect(() => {
@@ -216,7 +215,6 @@ export default function App() {
 
     setLoading(true);
     setShowProgress(true);
-    setActiveKey('running');
     setProgress({ phase: 'running', message: '开始执行', percent: 5 });
     setExecutions((current) => [
       {
@@ -279,6 +277,55 @@ export default function App() {
     } finally {
       setAssetLoading(false);
     }
+  }
+
+  async function deleteExecutionFiles(item: ExecutionItem) {
+    if (item.content?.outputDir) {
+      await assetAPI.deleteOutputDir(item.content.outputDir);
+    }
+  }
+
+  async function deleteExecution(item: ExecutionItem) {
+    try {
+      await deleteExecutionFiles(item);
+      setExecutions((current) => current.filter((record) => record.id !== item.id));
+      if (selectedExecution?.id === item.id) {
+        setSelectedExecution(null);
+        setPreviewAssets({});
+      }
+      message.success('历史记录和本地文件已删除');
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function clearHistory(items: ExecutionItem[]) {
+    const deletedIds: string[] = [];
+    const failedTitles: string[] = [];
+
+    for (const item of items) {
+      try {
+        await deleteExecutionFiles(item);
+        deletedIds.push(item.id);
+      } catch {
+        failedTitles.push(item.title);
+      }
+    }
+
+    if (deletedIds.length > 0) {
+      setExecutions((current) => current.filter((record) => !deletedIds.includes(record.id)));
+      if (selectedExecution && deletedIds.includes(selectedExecution.id)) {
+        setSelectedExecution(null);
+        setPreviewAssets({});
+      }
+    }
+
+    if (failedTitles.length > 0) {
+      message.warning(`部分本地文件删除失败，已保留 ${failedTitles.length} 条历史`);
+      return;
+    }
+
+    message.success('历史记录和本地文件已清空');
   }
 
   return (
@@ -362,7 +409,7 @@ export default function App() {
                     >
                       <Input addonAfter={<Button type="text" icon={<FolderOpenOutlined />} onClick={selectOutputDir} />} />
                     </Form.Item>
-                    <div className="config-actions">
+                    <div className="config-actions generate-actions">
                       <Button type="primary" htmlType="submit" icon={<PlayCircleOutlined />} loading={loading} size="large">
                         开始执行
                       </Button>
@@ -558,37 +605,26 @@ export default function App() {
             </Row>
           )}
 
-          {activeKey === 'running' && (
-            <Card className="panel-card">
-              <div className="section-head">
-                <Text strong>正在执行</Text>
-                <Tag color={loading ? 'processing' : 'default'}>{loading ? '生成中' : '空闲'}</Tag>
-              </div>
-              {loading || runningItems.length > 0 ? (
-                <Space direction="vertical" size={14} className="full-width">
-                  <Progress percent={progress.percent} status={progress.phase === 'error' ? 'exception' : undefined} />
-                  <Text>{progress.message}</Text>
-                  <List
-                    dataSource={runningItems}
-                    renderItem={(item) => (
-                      <List.Item>
-                        <List.Item.Meta title={item.title} description={item.summary} />
-                        <Tag color="processing">running</Tag>
-                      </List.Item>
-                    )}
-                  />
-                </Space>
-              ) : (
-                <Empty description="还没有正在执行的任务" />
-              )}
-            </Card>
-          )}
-
           {activeKey === 'history' && (
             <Card className="panel-card">
               <div className="section-head">
                 <Text strong>历史</Text>
-                <Tag>{completedItems.length} 条</Tag>
+                <Space>
+                  <Tag>{completedItems.length} 条</Tag>
+                  <Popconfirm
+                    title="清空全部历史？"
+                    description="会删除全部历史记录及对应本地输出目录，此操作不可恢复。"
+                    okText="清空"
+                    cancelText="取消"
+                    okButtonProps={{ danger: true }}
+                    onConfirm={() => clearHistory(completedItems)}
+                    disabled={completedItems.length === 0}
+                  >
+                    <Button danger size="small" icon={<DeleteOutlined />} disabled={completedItems.length === 0}>
+                      清空历史
+                    </Button>
+                  </Popconfirm>
+                </Space>
               </div>
               {completedItems.length === 0 ? (
                 <Empty description="暂无历史记录" />
@@ -603,7 +639,20 @@ export default function App() {
                         </Button>,
                         <Button key="open" type="link" onClick={() => item.outputDir && shellAPI.openPath(item.outputDir)}>
                           打开目录
-                        </Button>
+                        </Button>,
+                        <Popconfirm
+                          key="delete"
+                          title="删除这条历史和本地文件？"
+                          description="会删除这条记录对应的本地输出目录，此操作不可恢复。"
+                          okText="删除"
+                          cancelText="取消"
+                          okButtonProps={{ danger: true }}
+                          onConfirm={() => deleteExecution(item)}
+                        >
+                          <Button type="link" danger icon={<DeleteOutlined />}>
+                            删除
+                          </Button>
+                        </Popconfirm>
                       ]}
                     >
                       <List.Item.Meta

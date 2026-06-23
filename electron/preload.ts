@@ -23,7 +23,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     openExternal: (targetUrl: string) => ipcRenderer.invoke('shell:openExternal', targetUrl)
   },
   asset: {
-    getDataUrl: (targetPath: string) => ipcRenderer.invoke('asset:getDataUrl', targetPath)
+    getDataUrl: (targetPath: string) => ipcRenderer.invoke('asset:getDataUrl', targetPath),
+    deleteOutputDir: (targetPath: string) => ipcRenderer.invoke('asset:deleteOutputDir', targetPath)
   },
   onGenerationProgress: (callback: (event: ProgressEvent) => void) => {
     const listener = (_event: IpcRendererEvent, progress: ProgressEvent) => callback(progress);

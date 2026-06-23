@@ -5,24 +5,36 @@
 body {
   margin: 0;
   min-width: 1180px;
+  height: 100vh;
+  overflow: hidden;
   color: #1f2937;
   background: #f5f7fb;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
 }
 
+#root {
+  height: 100vh;
+  overflow: hidden;
+}
+
 .app-shell {
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
   background: #f5f7fb;
   flex-direction: row;
 }
 
 .app-sider {
+  height: 100vh;
+  overflow: hidden;
   background: #ffffff;
   border-right: 1px solid #e5e7eb;
 }
 
 .app-main {
   min-width: 0;
+  height: 100vh;
+  overflow: hidden;
 }
 
 .sider-brand {
@@ -47,6 +59,10 @@ body {
 }
 
 .app-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  flex: 0 0 auto;
   min-height: 80px;
   height: auto;
   padding: 12px 24px;
@@ -93,7 +109,12 @@ body {
 }
 
 .app-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: calc(100vh - 80px);
+  overflow: auto;
   padding: 20px;
+  padding-bottom: 96px;
 }
 
 .panel-card {
@@ -105,6 +126,18 @@ body {
   display: flex;
   justify-content: flex-end;
   padding-top: 4px;
+}
+
+.generate-actions {
+  position: sticky;
+  bottom: -20px;
+  z-index: 15;
+  margin: 0 -24px -24px;
+  padding: 14px 24px 16px;
+  background: rgba(255, 255, 255, 0.96);
+  border-top: 1px solid #e5e7eb;
+  box-shadow: 0 -10px 24px rgba(15, 23, 42, 0.06);
+  backdrop-filter: blur(8px);
 }
 
 .inline-link-button {

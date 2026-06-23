@@ -46,12 +46,24 @@ const fallback = {
     openExternal: () => Promise.resolve()
   },
   asset: {
-    getDataUrl: () => Promise.reject(new Error('Electron environment is not ready'))
+    getDataUrl: () => Promise.reject(new Error('Electron environment is not ready')),
+    deleteOutputDir: () => Promise.reject(new Error('删除本地文件功能需要重启应用后生效'))
   },
   onGenerationProgress: () => () => {}
 };
 
-const api = window.electronAPI ?? fallback;
+const runtimeApi = window.electronAPI ?? fallback;
+const api = {
+  ...fallback,
+  ...runtimeApi,
+  app: { ...fallback.app, ...runtimeApi.app },
+  config: { ...fallback.config, ...runtimeApi.config },
+  system: { ...fallback.system, ...runtimeApi.system },
+  dialog: { ...fallback.dialog, ...runtimeApi.dialog },
+  generation: { ...fallback.generation, ...runtimeApi.generation },
+  shell: { ...fallback.shell, ...runtimeApi.shell },
+  asset: { ...fallback.asset, ...runtimeApi.asset }
+};
 
 export const appAPI = api.app;
 export const configAPI = api.config;
