@@ -220,6 +220,11 @@ body {
   aspect-ratio: 9 / 16;
 }
 
+.landscape-cover-preview {
+  width: min(560px, 100%);
+  max-height: 420px;
+}
+
 .contact-card .ant-card-body {
   min-height: calc(100vh - 180px);
   display: flex;

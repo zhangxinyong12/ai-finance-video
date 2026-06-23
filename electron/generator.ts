@@ -66,6 +66,7 @@ export interface GeneratedContent {
   hashtags: string[];
   coverDescription: string;
   coverImagePath?: string;
+  landscapeCoverImagePath?: string;
   audioPath?: string;
   videoPath?: string;
   summary: string;
@@ -104,6 +105,7 @@ interface AiImagePrompts {
 interface SaveResult {
   files: string[];
   coverImagePath: string;
+  landscapeCoverImagePath: string;
   audioPath: string;
   videoPath: string;
 }
@@ -111,22 +113,25 @@ interface SaveResult {
 const emitter = new EventEmitter();
 
 const BROAD_FINANCE_QUERIES = [
-  'global financial markets macro economy central banks inflation interest rates',
-  'US market risk sentiment bond yields dollar liquidity',
-  'global commodities oil gold copper inflation demand',
-  'technology industry supply chain earnings capital expenditure',
-  'China ADR global trade tariffs manufacturing demand'
+  'global markets Fed inflation Treasury yields dollar yuan China stocks risk sentiment',
+  'US stocks Wall Street liquidity rates China ADR Hong Kong markets',
+  'AI chips semiconductors export controls supply chain capital expenditure',
+  'China trade tariffs manufacturing demand global supply chain',
+  'oil prices inflation transport chemicals China economy market sentiment'
 ];
 
 const NEWSAPI_FINANCE_QUERIES = [
-  'markets OR stocks OR oil OR Fed',
-  'global markets OR Wall Street OR Treasury yields',
-  'oil OR gold OR dollar OR inflation',
-  'technology earnings OR chips OR AI stocks',
-  'China markets OR global trade OR supply chain'
+  '(Fed OR inflation OR Treasury yields OR dollar OR yuan) AND (stocks OR markets OR China)',
+  '(Wall Street OR US stocks OR Hong Kong stocks OR China ADR) AND (risk sentiment OR liquidity)',
+  '(AI chips OR semiconductor OR Nvidia OR TSMC OR ASML) AND (supply chain OR export controls)',
+  '(China trade OR tariffs OR manufacturing OR supply chain) AND markets',
+  '(oil prices OR energy costs) AND (inflation OR China economy OR transport OR chemicals)'
 ];
 
-const DASHSCOPE_IMAGE_TIMEOUT_MS = 300000;
+const DASHSCOPE_IMAGE_TASK_TIMEOUT_MS = 300000;
+const DASHSCOPE_IMAGE_CREATE_TIMEOUT_MS = 30000;
+const DASHSCOPE_IMAGE_POLL_TIMEOUT_MS = 20000;
+const DASHSCOPE_IMAGE_DOWNLOAD_TIMEOUT_MS = 60000;
 const DASHSCOPE_IMAGE_POLL_INTERVAL_MS = 2000;
 
 const AI_IMAGE_PROMPT_BANNED_PATTERNS = [
@@ -159,10 +164,11 @@ const BANNED_OUTPUT_PATTERNS = [
 ];
 
 export const DEFAULT_CONTENT_PROMPT = [
-  '只做财经大类资讯解读，不做个股推荐。',
-  '受众是国内炒股人群，但内容必须保持公开资讯整理、宏观观察、海外市场、流动性、商品、科技周期、风险偏好等方向。',
+  '只做面向中国股票投资者的海外财经资讯整理，不做个股推荐。',
+  '优先解释海外新闻对 A 股风险偏好、人民币汇率、外资情绪、港股中概、科技产业链、出口链、通胀和流动性的观察意义。',
+  '黄金、原油、期货只能作为宏观变量或成本变量提及，不做交易分析、点位预测、做多做空、开户引流或收益暗示。',
   '不要输出股票代码、交易所代码、买入、卖出、持有、加仓、减仓、建仓、清仓、抄底、目标价、止盈、止损、收益承诺。',
-  '需要先识别今天海外财经新闻的主线，再解释它对国内投资者通常关注的风险偏好、汇率压力、商品价格、出口链、科技周期和流动性的观察意义。',
+  '需要先识别今天海外财经新闻的主线，再解释它对国内投资者通常关注的风险偏好、汇率压力、海外科技周期、出口链、通胀和流动性的观察意义。',
   '输出 4 到 6 个分镜。每个分镜的 title 是短栏目标题，4 到 10 个中文字符；caption 是画面卡片里的要点标题，8 到 18 个中文字符；两者不要重复。',
   '每段 narration 控制在 55 到 90 个中文字符，最多不要超过 100 个中文字符。每段用 2 到 3 个短句，保证视频画面文字清晰可读。'
 ].join('\n');
@@ -170,8 +176,9 @@ export const DEFAULT_CONTENT_PROMPT = [
 export const DEFAULT_SCRIPT_SYSTEM_PROMPT = [
   'You are a finance news editor for Chinese short-video platforms.',
   'The audience is retail stock-market participants in mainland China, but the output must not recommend stocks.',
-  'Only explain broad finance, macro, overseas markets, commodities, liquidity, industry cycles, and risk sentiment.',
-  'Do not output stock tickers, buy/sell advice, target prices, return promises, or trading instructions.',
+  'Use overseas news to explain China stock-market observation variables: risk appetite, yuan pressure, Hong Kong and China ADR sentiment, AI chips, export chains, inflation, and liquidity.',
+  'Gold, oil, and futures may only be discussed as macro or cost variables, never as tradable instruments.',
+  'Do not output stock tickers, buy/sell advice, target prices, return promises, trading instructions, long/short calls, or futures strategies.',
   'Return strict JSON only.'
 ].join(' ');
 
@@ -325,6 +332,7 @@ export async function fetchFinanceNews(
 
   const result = dedupeArticles(articles)
     .filter((article) => isArticleAfter(article, publishedAfter))
+    .sort(compareArticlesForChinaStockAudience)
     .slice(0, Math.max(1, Math.min(request.maxArticles, 40)));
 
   if (result.length === 0 && warnings.length > 0) {
@@ -543,6 +551,52 @@ function dedupeArticles(articles: NewsArticle[]): NewsArticle[] {
   });
 }
 
+function compareArticlesForChinaStockAudience(a: NewsArticle, b: NewsArticle): number {
+  const scoreDiff = scoreChinaStockAudienceRelevance(b) - scoreChinaStockAudienceRelevance(a);
+  if (scoreDiff !== 0) return scoreDiff;
+
+  const at = a.publishedAt ? Date.parse(a.publishedAt) : 0;
+  const bt = b.publishedAt ? Date.parse(b.publishedAt) : 0;
+  return bt - at;
+}
+
+function scoreChinaStockAudienceRelevance(article: NewsArticle): number {
+  const text = [
+    article.title,
+    article.description,
+    article.snippet,
+    article.source,
+    article.provider,
+    safeArray(article.entities).join(' ')
+  ].join(' ').toLowerCase();
+
+  let score = 0;
+  const positiveWeights: Array<[RegExp, number]> = [
+    [/\b(china|chinese|yuan|renminbi|hong kong|adr|tariff|trade|export control|supply chain)\b/i, 8],
+    [/\b(fed|fomc|inflation|cpi|pce|treasury yield|bond yield|dollar|liquidity|rate cut|interest rate)\b/i, 7],
+    [/\b(ai|chip|chips|semiconductor|nvidia|tsmc|asml|data center|capex|cloud)\b/i, 7],
+    [/\b(wall street|nasdaq|s&p|global markets|risk sentiment|market sentiment|stocks|equities)\b/i, 5],
+    [/\b(ev|electric vehicle|battery|lithium|solar|biotech|pharma|real estate|banks|brokerage|insurance)\b/i, 4],
+    [/\b(oil prices|energy costs|crude prices|commodity prices|shipping|transport|chemicals)\b/i, 2]
+  ];
+  const negativeWeights: Array<[RegExp, number]> = [
+    [/\b(crypto|bitcoin|ethereum|forex trading|options strategy)\b/i, 10],
+    [/\b(gold futures|crude futures|oil futures|futures contract|long position|short position|trading signal)\b/i, 8],
+    [/\b(price target|buy rating|sell rating|upgrade|downgrade)\b/i, 6]
+  ];
+
+  for (const [pattern, weight] of positiveWeights) {
+    if (pattern.test(text)) score += weight;
+  }
+  for (const [pattern, weight] of negativeWeights) {
+    if (pattern.test(text)) score -= weight;
+  }
+
+  const publishedAt = article.publishedAt ? Date.parse(article.publishedAt) : 0;
+  if (Number.isFinite(publishedAt) && Date.now() - publishedAt <= 6 * 60 * 60 * 1000) score += 3;
+  return score;
+}
+
 export async function generateContent(
   request: GenerationRequest,
   config: AppRuntimeConfig
@@ -644,8 +698,8 @@ Create a Chinese vertical short-video script for Douyin / WeChat Channels / Xiao
 
 Positioning:
 - Topic scope: broad finance only, not individual stock picking.
-- Audience: mainland China retail stock-market participants who care about market direction, macro signals, overseas markets, commodities, liquidity, and industry sentiment.
-- Use overseas finance news as source material, then explain why it matters for market observation.
+- Audience: mainland China retail stock-market participants who care about A-share risk appetite, yuan pressure, Hong Kong and China ADR sentiment, overseas tech cycles, export chains, inflation, and liquidity.
+- Use overseas finance news as source material, then explain why it matters for China stock-market observation.
 
 Input topic: ${request.topic}
 Target length: about ${request.durationSeconds} seconds
@@ -661,12 +715,14 @@ Compliance rules:
 - Do not recommend any stock or sector as a trade.
 - Do not say buy, sell, hold, add position, reduce position, open position, clear position, bottom fishing, get in, target price, stop profit, stop loss, worth watching, or similar trading guidance.
 - Do not forecast exact price moves or returns.
+- Do not provide gold, crude oil, futures, options, forex, or crypto trading analysis, long/short calls, entry points, or strategy.
+- Gold, oil, and commodity news can only be framed as macro signals, inflation expectations, cost pressure, risk appetite, or industry-chain background.
 - If source news includes tickers, rewrite them as company names, sectors, or market events.
-- The final script can discuss "risk appetite", "liquidity", "valuation pressure", "industry sentiment", "safe-haven demand", "external market signal", but must stay informational.
+- The final script can discuss "risk appetite", "liquidity", "valuation pressure", "industry sentiment", "safe-haven demand", "external market signal", "yuan pressure", and "export-chain expectations", but must stay informational.
 
 Analysis requirements:
 - First identify the main global finance theme from the news set.
-- Then connect it to what Chinese stock-market viewers usually care about: risk appetite, exchange-rate pressure, commodity prices, overseas tech cycle, export chain, interest-rate expectations, or liquidity.
+- Then connect it to what Chinese stock-market viewers usually care about: A-share risk appetite, exchange-rate pressure, Hong Kong and China ADR sentiment, overseas tech cycle, export chain, interest-rate expectations, inflation, or liquidity.
 - Include 4 to 6 scenes.
 - Each scene must include narration, caption, and imagePrompt.
 - For each scene, title and caption must be different:
@@ -828,6 +884,7 @@ async function saveGeneratedFiles(
   const publishPath = path.join(outputDir, 'douyin-publish.json');
   const coverHtmlPath = path.join(outputDir, 'cover.html');
   const coverImagePath = path.join(outputDir, 'cover.png');
+  const landscapeCoverImagePath = path.join(outputDir, 'cover-horizontal.png');
   const videoPath = path.join(outputDir, 'video.mp4');
   const concatPath = path.join(outputDir, 'video-frames.txt');
   const audioConcatPath = path.join(outputDir, 'audio-parts.txt');
@@ -836,6 +893,8 @@ async function saveGeneratedFiles(
   const generatedBackgroundPaths: string[] = [];
 
   const normalizedContent = { ...content, scenes, hashtags };
+  let coverBackgroundDataUrl: string | undefined;
+  let firstSceneBackgroundDataUrl: string | undefined;
   const aiImagePrompts = config.enableAiImages
     ? await generateAiImagePromptsWithDeepseek(normalizedContent, config).catch((error) => {
       progress('image', `DeepSeek image prompts failed, using local fallback: ${error instanceof Error ? error.message : String(error)}`, 83);
@@ -854,7 +913,8 @@ async function saveGeneratedFiles(
         84
       );
       generatedBackgroundPaths.push(coverBackgroundPath);
-      const coverHtml = renderAiCoverOverlayHtml(normalizedContent, await imageFileToDataUrl(coverBackgroundPath));
+      coverBackgroundDataUrl = await imageFileToDataUrl(coverBackgroundPath);
+      const coverHtml = renderAiCoverOverlayHtml(normalizedContent, coverBackgroundDataUrl);
       await fs.writeFile(coverHtmlPath, coverHtml, 'utf8');
       await renderHtmlImage(coverHtml, coverImagePath, { width: 1145, height: 1529 });
     } catch (error) {
@@ -885,8 +945,10 @@ async function saveGeneratedFiles(
           88
         );
         generatedBackgroundPaths.push(sceneBackgroundPath);
+        const sceneBackgroundDataUrl = await imageFileToDataUrl(sceneBackgroundPath);
+        firstSceneBackgroundDataUrl ||= sceneBackgroundDataUrl;
         await renderHtmlImage(
-          renderSceneHtml(normalizedContent, scenes[index], index, await imageFileToDataUrl(sceneBackgroundPath)),
+          renderSceneHtml(normalizedContent, scenes[index], index, sceneBackgroundDataUrl),
           sceneImagePath
         );
       } catch (error) {
@@ -898,6 +960,21 @@ async function saveGeneratedFiles(
     }
     sceneImagePaths.push(sceneImagePath);
   }
+
+  if (config.enableAiImages && !coverBackgroundDataUrl && firstSceneBackgroundDataUrl) {
+    progress('cover', 'Rendering covers with first scene AI background', 89);
+    coverBackgroundDataUrl = firstSceneBackgroundDataUrl;
+    const coverHtml = renderAiCoverOverlayHtml(normalizedContent, coverBackgroundDataUrl);
+    await fs.writeFile(coverHtmlPath, coverHtml, 'utf8');
+    await renderHtmlImage(coverHtml, coverImagePath, { width: 1145, height: 1529 });
+  }
+
+  progress('cover', 'Rendering landscape cover image', 89);
+  await renderHtmlImage(
+    renderLandscapeCoverHtml(normalizedContent, coverBackgroundDataUrl),
+    landscapeCoverImagePath,
+    { width: 788, height: 590 }
+  );
 
   progress('audio', 'Rendering narration audio', 90);
   const sceneDurations = await renderSceneAudios(outputDir, scenes, narrationPath, audioPath, audioConcatPath, config);
@@ -911,6 +988,7 @@ async function saveGeneratedFiles(
   const contentWithAssets = {
     ...normalizedContent,
     coverImagePath,
+    landscapeCoverImagePath,
     videoPath,
     audioPath,
     sourceArticles: articles
@@ -926,12 +1004,14 @@ async function saveGeneratedFiles(
     content: content.publishContent,
     hashtags,
     coverImagePath,
+    landscapeCoverImagePath,
     audioPath,
     videoPath
   }, null, 2), 'utf8');
 
   return {
     coverImagePath,
+    landscapeCoverImagePath,
     audioPath,
     videoPath,
     files: [
@@ -948,6 +1028,7 @@ async function saveGeneratedFiles(
       coverHtmlPath,
       ...generatedBackgroundPaths,
       coverImagePath,
+      landscapeCoverImagePath,
       ...sceneImagePaths,
       concatPath,
       videoPath
@@ -1297,6 +1378,140 @@ function renderAiCoverOverlayHtml(
   </div>
 </body>
 </html>`, { width: 1145, height: 1529 });
+}
+
+function renderLandscapeCoverHtml(
+  content: Omit<GeneratedContent, 'sourceArticles' | 'outputDir' | 'files'>,
+  backgroundDataUrl?: string
+): string {
+  const timestamp = formatChineseTimestamp(new Date());
+  const headline = displayText(content.coverDescription || content.publishTitle || content.videoTitle);
+  const subtitle = displayText(content.summary || content.publishTitle);
+  const headlineSize = fitTextFontSize(headline, { maxFont: 74, minFont: 42, boxWidth: 470, maxLines: 3 });
+  const subtitleSize = fitTextFontSize(subtitle, { maxFont: 28, minFont: 20, boxWidth: 470, maxLines: 2 });
+
+  return enforceFixedCanvasHtml(`<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      width: 788px;
+      height: 590px;
+      overflow: hidden;
+      font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
+      color: #ffffff;
+      background: #0f172a;
+    }
+    .landscape-cover {
+      position: relative;
+      width: 788px;
+      height: 590px;
+      overflow: hidden;
+      padding: 44px 52px;
+      isolation: isolate;
+      background:
+        radial-gradient(circle at 76% 28%, rgba(37, 99, 235, .34), transparent 28%),
+        linear-gradient(135deg, #0f172a 0%, #111827 54%, #1f2937 100%);
+    }
+    .landscape-bg-canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 0;
+    }
+    .landscape-shade {
+      position: absolute;
+      inset: 0;
+      z-index: 1;
+      background:
+        linear-gradient(90deg, rgba(2, 6, 23, .74) 0%, rgba(2, 6, 23, .44) 52%, rgba(2, 6, 23, .24) 100%),
+        linear-gradient(180deg, rgba(2, 6, 23, .35) 0%, rgba(2, 6, 23, .12) 48%, rgba(2, 6, 23, .58) 100%);
+    }
+    .content {
+      position: relative;
+      z-index: 2;
+      width: 520px;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+    .top {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      color: rgba(255,255,255,.88);
+      font-size: 24px;
+      line-height: 1.1;
+      font-weight: 800;
+      text-shadow: 0 3px 12px rgba(0,0,0,.45);
+    }
+    .badge {
+      padding: 10px 14px;
+      border-radius: 8px;
+      background: rgba(255,255,255,.94);
+      color: #111827;
+      font-size: 22px;
+      font-weight: 900;
+    }
+    h1 {
+      margin: 0;
+      max-height: 245px;
+      overflow: hidden;
+      font-size: ${headlineSize}px;
+      line-height: 1.08;
+      letter-spacing: 0;
+      font-weight: 900;
+      text-shadow: 0 6px 24px rgba(0,0,0,.58);
+    }
+    .subtitle {
+      margin-top: 18px;
+      max-height: 78px;
+      overflow: hidden;
+      font-size: ${subtitleSize}px;
+      line-height: 1.35;
+      font-weight: 800;
+      color: rgba(255,255,255,.88);
+      text-shadow: 0 4px 18px rgba(0,0,0,.50);
+    }
+    .bottom {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      border-top: 2px solid rgba(255,255,255,.62);
+      padding-top: 18px;
+      color: rgba(255,255,255,.86);
+      font-size: 20px;
+      font-weight: 800;
+      text-shadow: 0 3px 12px rgba(0,0,0,.46);
+    }
+  </style>
+</head>
+<body>
+  <div class="landscape-cover">
+    ${backgroundDataUrl ? `<canvas class="landscape-bg-canvas" width="788" height="590" data-background-src="${escapeHtml(backgroundDataUrl)}"></canvas>` : ''}
+    <div class="landscape-shade"></div>
+    <div class="content">
+      <div class="top">
+        <div class="badge">财经资讯</div>
+        <div>${escapeHtml(timestamp)}</div>
+      </div>
+      <main>
+        <h1>${escapeHtml(headline)}</h1>
+        <div class="subtitle">${escapeHtml(visualText(subtitle, 42))}</div>
+      </main>
+      <div class="bottom">
+        <span>公开资讯整理</span>
+        <span>非投资建议</span>
+      </div>
+    </div>
+  </div>
+</body>
+</html>`, { width: 788, height: 590 });
 }
 
 function renderSceneHtml(
@@ -1729,6 +1944,31 @@ async function renderDashscopeTextToImage(
     throw new Error('没有配置 DashScope Key，无法生成 AI 图片。');
   }
 
+  let lastError = '';
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      progress('image', `${label} image attempt ${attempt}/3`, percent);
+      await renderDashscopeTextToImageOnce(promptText, outputPath, config, label, percent);
+      return;
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+      if (attempt < 3) {
+        progress('image', `${label} image attempt ${attempt}/3 failed, retrying: ${lastError}`, percent);
+        await new Promise((resolve) => setTimeout(resolve, 1500 * attempt));
+      }
+    }
+  }
+
+  throw new Error(`${label} 文生图连续重试 3 次仍失败。${lastError}`);
+}
+
+async function renderDashscopeTextToImageOnce(
+  promptText: string,
+  outputPath: string,
+  config: AppRuntimeConfig,
+  label: string,
+  percent: number
+): Promise<void> {
   const createResponse = await fetchWithTimeout('https://dashscope.aliyuncs.com/api/v1/services/aigc/image-generation/generation', {
     method: 'POST',
     headers: {
@@ -1758,7 +1998,7 @@ async function renderDashscopeTextToImage(
         negative_prompt: '文字，水印，二维码，股票代码，股票名称，买入，卖出，收益承诺，低清晰度，畸形图表'
       }
     })
-  }, DASHSCOPE_IMAGE_TIMEOUT_MS);
+  }, DASHSCOPE_IMAGE_CREATE_TIMEOUT_MS);
 
   if (!createResponse.ok) {
     const detail = await createResponse.text().catch(() => '');
@@ -1772,7 +2012,7 @@ async function renderDashscopeTextToImage(
     throw new Error(`${label} 文生图任务未返回图片地址`);
   }
 
-  const imageResponse = await fetchWithTimeout(imageUrl, {}, DASHSCOPE_IMAGE_TIMEOUT_MS);
+  const imageResponse = await fetchWithTimeout(imageUrl, {}, DASHSCOPE_IMAGE_DOWNLOAD_TIMEOUT_MS);
   if (!imageResponse.ok) {
     throw new Error(`${label} 图片下载失败：${imageResponse.status} ${imageResponse.statusText}`);
   }
@@ -1791,7 +2031,7 @@ async function waitForDashscopeImage(
     throw new Error(`${label} 文生图任务没有返回 task_id`);
   }
 
-  const maxAttempts = Math.ceil(DASHSCOPE_IMAGE_TIMEOUT_MS / DASHSCOPE_IMAGE_POLL_INTERVAL_MS);
+  const maxAttempts = Math.ceil(DASHSCOPE_IMAGE_TASK_TIMEOUT_MS / DASHSCOPE_IMAGE_POLL_INTERVAL_MS);
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     progress('image', `${label} AI image polling ${attempt}/${maxAttempts}`, percent);
     await new Promise((resolve) => setTimeout(resolve, DASHSCOPE_IMAGE_POLL_INTERVAL_MS));
@@ -1799,7 +2039,7 @@ async function waitForDashscopeImage(
       headers: {
         Authorization: `Bearer ${config.alibabaDashscopeApiKey}`
       }
-    }, DASHSCOPE_IMAGE_TIMEOUT_MS);
+    }, DASHSCOPE_IMAGE_POLL_TIMEOUT_MS);
 
     if (!response.ok) {
       throw new Error(`${label} 文生图任务查询失败：${response.status} ${response.statusText}`);
@@ -1815,7 +2055,7 @@ async function waitForDashscopeImage(
     }
   }
 
-  throw new Error(`${label} 文生图任务超时`);
+  throw new Error(`${label} 文生图任务超过 ${Math.round(DASHSCOPE_IMAGE_TASK_TIMEOUT_MS / 1000)} 秒仍未完成`);
 }
 
 function extractDashscopeImageUrl(payload: any): string | undefined {

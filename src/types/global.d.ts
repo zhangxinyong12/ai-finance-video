@@ -67,6 +67,7 @@ export interface GeneratedContent {
   hashtags: string[];
   coverDescription: string;
   coverImagePath?: string;
+  landscapeCoverImagePath?: string;
   audioPath?: string;
   videoPath?: string;
   summary: string;

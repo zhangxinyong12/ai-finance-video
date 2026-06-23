@@ -88,6 +88,7 @@ type ConfigFormValues = AppRuntimeConfig;
 
 interface PreviewAssets {
   cover?: string;
+  landscapeCover?: string;
   video?: string;
 }
 
@@ -183,13 +184,13 @@ export default function App() {
     setFfmpeg(ffmpegStatus);
     configForm.setFieldsValue(configStatus.settings);
     form.setFieldsValue({
-      topic: 'broad global finance macro markets liquidity commodities technology supply chain',
-      maxArticles: 12,
-      requestRounds: 4,
+      topic: 'China stock market global macro Fed yuan Hong Kong ADR AI chips export supply chain inflation liquidity',
+      maxArticles: 18,
+      requestRounds: 5,
       maxNewsAgeHours: 24,
       durationSeconds: 60,
       outputDir: configStatus.defaultOutputDir,
-      tone: 'Objective, restrained, high-information-density broad finance analysis for mainland Chinese stock-market retail audiences. Explain macro, overseas markets, liquidity, commodities, technology cycle and risk sentiment only. Do not recommend stocks, sectors, tickers, trades, prices or returns.',
+      tone: 'Objective, restrained, high-information-density finance news analysis for mainland Chinese stock-market retail audiences. Explain overseas events through A-share risk appetite, yuan pressure, Hong Kong and China ADR sentiment, AI chips, export chains, inflation and liquidity. Do not recommend stocks, sectors, tickers, trades, prices, futures strategies or returns.',
       contentPrompt: configStatus.settings.contentPrompt
     });
   }
@@ -298,11 +299,14 @@ export default function App() {
 
     setAssetLoading(true);
     try {
-      const [cover, video] = await Promise.all([
+      const landscapeCoverPath = item.content.landscapeCoverImagePath
+        || (item.content.outputDir ? `${item.content.outputDir.replace(/[\\/]+$/, '')}/cover-horizontal.png` : undefined);
+      const [cover, landscapeCover, video] = await Promise.all([
         item.content.coverImagePath ? assetAPI.getDataUrl(item.content.coverImagePath).catch(() => undefined) : undefined,
+        landscapeCoverPath ? assetAPI.getDataUrl(landscapeCoverPath).catch(() => undefined) : undefined,
         item.content.videoPath ? assetAPI.getDataUrl(item.content.videoPath).catch(() => undefined) : undefined
       ]);
-      setPreviewAssets({ cover, video });
+      setPreviewAssets({ cover, landscapeCover, video });
     } finally {
       setAssetLoading(false);
     }
@@ -403,10 +407,10 @@ export default function App() {
                     <Form.Item
                       name="topic"
                       label="财经主题"
-                      extra="建议用英文描述财经大类，不写股票代码。例如 broad global finance macro markets liquidity commodities technology supply chain。"
+                      extra="建议用英文描述面向中国股民的海外变量，不写股票代码。例如 China stock market global macro Fed yuan Hong Kong ADR AI chips export supply chain inflation liquidity。"
                       rules={[{ required: true, message: '请输入财经主题' }]}
                     >
-                      <Input.TextArea rows={4} placeholder="broad global finance macro markets liquidity commodities technology supply chain" />
+                      <Input.TextArea rows={4} placeholder="China stock market global macro Fed yuan Hong Kong ADR AI chips export supply chain inflation liquidity" />
                     </Form.Item>
                     <Row gutter={12}>
                       <Col span={6}>
@@ -822,7 +826,7 @@ export default function App() {
               },
               {
                 key: 'cover',
-                label: '封面',
+                label: '竖屏封面',
                 children: (
                   <div className="asset-preview">
                     {assetLoading && <Progress percent={60} showInfo={false} />}
@@ -830,6 +834,20 @@ export default function App() {
                       <img className="cover-preview" src={previewAssets.cover} alt="封面预览" />
                     ) : (
                       <Empty description="未读取到封面图片" />
+                    )}
+                  </div>
+                )
+              },
+              {
+                key: 'landscape-cover',
+                label: '横屏封面',
+                children: (
+                  <div className="asset-preview">
+                    {assetLoading && <Progress percent={60} showInfo={false} />}
+                    {previewAssets.landscapeCover ? (
+                      <img className="cover-preview landscape-cover-preview" src={previewAssets.landscapeCover} alt="横屏封面预览" />
+                    ) : (
+                      <Empty description="未读取到横屏封面图片" />
                     )}
                   </div>
                 )
