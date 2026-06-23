@@ -19,6 +19,7 @@ import {
   Row,
   Space,
   Statistic,
+  Switch,
   Table,
   Tabs,
   Tag,
@@ -620,6 +621,25 @@ export default function App() {
                       <Col xs={24} md={8}>
                         <Form.Item name="ttsTimeoutMs" label="语音超时（毫秒）">
                           <InputNumber min={5000} max={180000} step={5000} className="full-width" />
+                        </Form.Item>
+                      </Col>
+                    </Row>
+
+                    <Divider orientation="left">DashScope 文生图</Divider>
+                    <Row gutter={12}>
+                      <Col xs={24} md={8}>
+                        <Form.Item name="enableAiImages" label="AI 生成图片" valuePropName="checked">
+                          <Switch checkedChildren="开启" unCheckedChildren="关闭" />
+                        </Form.Item>
+                      </Col>
+                      <Col xs={24} md={8}>
+                        <Form.Item name="dashscopeImageModel" label="文生图模型" rules={[{ required: true, message: '请输入文生图模型' }]}>
+                          <Input placeholder="wan2.6-t2i" />
+                        </Form.Item>
+                      </Col>
+                      <Col xs={24} md={8}>
+                        <Form.Item name="dashscopeImageSize" label="图片尺寸">
+                          <Input placeholder="960*1696" disabled />
                         </Form.Item>
                       </Col>
                     </Row>

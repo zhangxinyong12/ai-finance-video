@@ -19,6 +19,9 @@ export interface AppRuntimeConfig extends AppSecrets {
   deepseekCoverTemperature: number;
   dashscopeTtsModel: string;
   dashscopeTtsVoice: string;
+  enableAiImages: boolean;
+  dashscopeImageModel: string;
+  dashscopeImageSize: string;
   ttsTimeoutMs: number;
   contentPrompt: string;
   scriptSystemPrompt: string;
@@ -93,6 +96,11 @@ interface FinanceNewsResult {
   warnings: string[];
 }
 
+interface AiImagePrompts {
+  coverPrompt: string;
+  scenePrompts: string[];
+}
+
 interface SaveResult {
   files: string[];
   coverImagePath: string;
@@ -116,6 +124,27 @@ const NEWSAPI_FINANCE_QUERIES = [
   'oil OR gold OR dollar OR inflation',
   'technology earnings OR chips OR AI stocks',
   'China markets OR global trade OR supply chain'
+];
+
+const DASHSCOPE_IMAGE_TIMEOUT_MS = 300000;
+const DASHSCOPE_IMAGE_POLL_INTERVAL_MS = 2000;
+
+const AI_IMAGE_PROMPT_BANNED_PATTERNS = [
+  /抖音/g,
+  /小红书/g,
+  /视频号/g,
+  /9\s*[:：]\s*16/g,
+  /二维码/g,
+  /条形码/g,
+  /水印/g,
+  /文字/g,
+  /字幕/g,
+  /标题/g,
+  /股票代码/g,
+  /股票名称/g,
+  /买入/g,
+  /卖出/g,
+  /收益承诺/g
 ];
 
 const BANNED_OUTPUT_PATTERNS = [
@@ -161,6 +190,9 @@ export const DEFAULT_APP_CONFIG: AppRuntimeConfig = {
   deepseekCoverTemperature: 0.35,
   dashscopeTtsModel: 'qwen3-tts-flash',
   dashscopeTtsVoice: 'Cherry',
+  enableAiImages: false,
+  dashscopeImageModel: 'wan2.6-t2i',
+  dashscopeImageSize: '960*1696',
   ttsTimeoutMs: 45000,
   contentPrompt: DEFAULT_CONTENT_PROMPT,
   scriptSystemPrompt: DEFAULT_SCRIPT_SYSTEM_PROMPT,
@@ -801,17 +833,69 @@ async function saveGeneratedFiles(
   const audioConcatPath = path.join(outputDir, 'audio-parts.txt');
   const sceneImagePaths: string[] = [];
   const sceneAudioPaths: string[] = [];
+  const generatedBackgroundPaths: string[] = [];
 
   const normalizedContent = { ...content, scenes, hashtags };
-  progress('cover', 'Generating AI cover HTML layout', 84);
-  const coverHtml = await generateCoverHtmlWithDeepseek(normalizedContent, articles, config);
-  await fs.writeFile(coverHtmlPath, coverHtml, 'utf8');
-  await renderHtmlImage(coverHtml, coverImagePath, { width: 1145, height: 1529 });
+  const aiImagePrompts = config.enableAiImages
+    ? await generateAiImagePromptsWithDeepseek(normalizedContent, config).catch((error) => {
+      progress('image', `DeepSeek image prompts failed, using local fallback: ${error instanceof Error ? error.message : String(error)}`, 83);
+      return null;
+    })
+    : null;
+  if (config.enableAiImages) {
+    const coverBackgroundPath = path.join(outputDir, 'cover-bg.png');
+    try {
+      progress('cover', 'Generating DashScope AI cover background', 84);
+      await renderDashscopeTextToImage(
+        aiImagePrompts?.coverPrompt || buildCoverAiImagePrompt(normalizedContent),
+        coverBackgroundPath,
+        config,
+        '封面背景图',
+        84
+      );
+      generatedBackgroundPaths.push(coverBackgroundPath);
+      const coverHtml = renderAiCoverOverlayHtml(normalizedContent, await imageFileToDataUrl(coverBackgroundPath));
+      await fs.writeFile(coverHtmlPath, coverHtml, 'utf8');
+      await renderHtmlImage(coverHtml, coverImagePath, { width: 1145, height: 1529 });
+    } catch (error) {
+      progress('cover', `AI cover failed, using HTML fallback: ${error instanceof Error ? error.message : String(error)}`, 84);
+      const coverHtml = await generateCoverHtmlWithDeepseek(normalizedContent, articles, config);
+      await fs.writeFile(coverHtmlPath, coverHtml, 'utf8');
+      await renderHtmlImage(coverHtml, coverImagePath, { width: 1145, height: 1529 });
+    }
+  } else {
+    progress('cover', 'Generating AI cover HTML layout', 84);
+    const coverHtml = await generateCoverHtmlWithDeepseek(normalizedContent, articles, config);
+    await fs.writeFile(coverHtmlPath, coverHtml, 'utf8');
+    await renderHtmlImage(coverHtml, coverImagePath, { width: 1145, height: 1529 });
+  }
 
   progress('media', 'Rendering scene images', 88);
   for (let index = 0; index < scenes.length; index += 1) {
     const sceneImagePath = path.join(outputDir, `scene-${String(index + 1).padStart(2, '0')}.png`);
-    await renderHtmlImage(renderSceneHtml(normalizedContent, scenes[index], index), sceneImagePath);
+    if (config.enableAiImages) {
+      const sceneBackgroundPath = path.join(outputDir, `scene-bg-${String(index + 1).padStart(2, '0')}.png`);
+      try {
+        progress('media', `Generating DashScope AI scene background ${index + 1}/${scenes.length}`, 88 + Math.round((index / Math.max(scenes.length, 1)) * 2));
+        await renderDashscopeTextToImage(
+          aiImagePrompts?.scenePrompts[index] || buildSceneAiImagePrompt(scenes[index], index),
+          sceneBackgroundPath,
+          config,
+          `分镜 ${index + 1} 背景图`,
+          88
+        );
+        generatedBackgroundPaths.push(sceneBackgroundPath);
+        await renderHtmlImage(
+          renderSceneHtml(normalizedContent, scenes[index], index, await imageFileToDataUrl(sceneBackgroundPath)),
+          sceneImagePath
+        );
+      } catch (error) {
+        progress('media', `AI scene failed, using HTML fallback: ${error instanceof Error ? error.message : String(error)}`, 88);
+        await renderHtmlImage(renderSceneHtml(normalizedContent, scenes[index], index), sceneImagePath);
+      }
+    } else {
+      await renderHtmlImage(renderSceneHtml(normalizedContent, scenes[index], index), sceneImagePath);
+    }
     sceneImagePaths.push(sceneImagePath);
   }
 
@@ -834,7 +918,7 @@ async function saveGeneratedFiles(
 
   await fs.writeFile(jsonPath, JSON.stringify(contentWithAssets, null, 2), 'utf8');
   await fs.writeFile(scriptPath, renderScriptMarkdown(normalizedContent), 'utf8');
-  await fs.writeFile(promptsPath, scenes.map((scene, index) => `${index + 1}. ${scene.imagePrompt}`).join('\n\n'), 'utf8');
+  await fs.writeFile(promptsPath, renderImagePromptsFile(scenes, aiImagePrompts), 'utf8');
   await fs.writeFile(sourcesPath, JSON.stringify(articles, null, 2), 'utf8');
   await fs.writeFile(subtitlesPath, renderSrt(scenes, sceneDurations), 'utf8');
   await fs.writeFile(publishPath, JSON.stringify({
@@ -862,6 +946,7 @@ async function saveGeneratedFiles(
       subtitlesPath,
       publishPath,
       coverHtmlPath,
+      ...generatedBackgroundPaths,
       coverImagePath,
       ...sceneImagePaths,
       concatPath,
@@ -900,6 +985,96 @@ function renderScriptMarkdown(content: Omit<GeneratedContent, 'sourceArticles' |
     '',
     scenes
   ].join('\n');
+}
+
+function renderImagePromptsFile(scenes: ScenePlan[], prompts: AiImagePrompts | null): string {
+  if (prompts) {
+    return [
+      `封面：${prompts.coverPrompt}`,
+      ...prompts.scenePrompts.map((prompt, index) => `分镜 ${index + 1}：${prompt}`)
+    ].join('\n\n');
+  }
+
+  return scenes.map((scene, index) => `${index + 1}. ${scene.imagePrompt}`).join('\n\n');
+}
+
+async function generateAiImagePromptsWithDeepseek(
+  content: Omit<GeneratedContent, 'sourceArticles' | 'outputDir' | 'files'>,
+  config: AppRuntimeConfig
+): Promise<AiImagePrompts> {
+  const scenes = safeScenes(content.scenes);
+  const prompt = `
+你是专业的中文文生图提示词设计师，负责为财经资讯短视频生成阿里万相文生图提示词。
+
+目标：
+- 根据封面和每个分镜，生成适合财经新闻视觉的中文文生图提示词。
+- 只描述画面元素、场景、光线、构图、风格，不描述平台、比例、尺寸、文件格式。
+- 正向提示词里绝对不要出现这些词：抖音、小红书、视频号、9:16、二维码、条形码、水印、文字、字幕、标题、股票代码、股票名称、买入、卖出、收益承诺。
+- 不要写“不要/避免/无/禁止”这类否定句；只写希望画面出现什么。
+- 每条 60 到 120 个中文字符，具体、可视化、适合金融新闻背景图。
+- 画面主体放在两侧、上方或远景，中心区域保持开阔、低细节、层次干净，方便后期叠加信息。
+- 背景本身要有可观看价值，边缘和远景保留金融场景细节，不能只是一块纯色或模糊色块。
+- 风格可以包含：全球市场数据屏幕、交易大厅、宏观经济仪表盘、商品市场、科技产业链、央行建筑剪影、资金流动抽象光线、风险情绪可视化。
+
+封面信息：
+- 标题：${content.publishTitle}
+- 封面主题：${content.coverDescription}
+- 摘要：${content.summary}
+
+分镜信息：
+${scenes.map((scene, index) => [
+    `#${index + 1}`,
+    `title: ${scene.title}`,
+    `caption: ${scene.caption}`,
+    `narration: ${scene.narration}`,
+    `oldImagePrompt: ${scene.imagePrompt}`
+  ].join('\n')).join('\n\n')}
+
+返回严格 JSON：
+{
+  "coverPrompt": "封面文生图提示词",
+  "scenePrompts": ["分镜1提示词", "分镜2提示词"]
+}
+`.trim();
+
+  const response = await fetch('https://api.deepseek.com/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${config.deepseekApiKey}`
+    },
+    body: JSON.stringify({
+      model: config.deepseekScriptModel,
+      temperature: 0.25,
+      response_format: { type: 'json_object' },
+      messages: [
+        {
+          role: 'system',
+          content: 'Return strict JSON only. Generate safe visual text-to-image prompts for financial news background images.'
+        },
+        { role: 'user', content: prompt }
+      ]
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`DeepSeek image prompt request failed: ${response.status} ${response.statusText}`);
+  }
+
+  const payload = await response.json() as any;
+  const raw = payload.choices?.[0]?.message?.content;
+  if (!raw) {
+    throw new Error('DeepSeek 没有返回文生图提示词。');
+  }
+
+  const parsed = parseJsonObject(raw);
+  const coverPrompt = cleanAiImagePrompt(parsed.coverPrompt, buildCoverAiImagePrompt(content));
+  const scenePrompts = scenes.map((scene, index) => cleanAiImagePrompt(
+    Array.isArray(parsed.scenePrompts) ? parsed.scenePrompts[index] : '',
+    buildSceneAiImagePrompt(scene, index)
+  ));
+
+  return { coverPrompt, scenePrompts };
 }
 
 async function generateCoverHtmlWithDeepseek(
@@ -988,10 +1163,147 @@ Return strict JSON only:
   return enforceFixedCanvasHtml(html, { width: 1145, height: 1529 });
 }
 
+function renderAiCoverOverlayHtml(
+  content: Omit<GeneratedContent, 'sourceArticles' | 'outputDir' | 'files'>,
+  backgroundDataUrl: string
+): string {
+  const timestamp = formatChineseTimestamp(new Date());
+  const headline = displayText(content.coverDescription || content.publishTitle || content.videoTitle);
+  const subtitle = displayText(content.summary || content.publishTitle);
+  const headlineSize = fitTextFontSize(headline, { maxFont: 146, minFont: 82, boxWidth: 900, maxLines: 4 });
+  const subtitleSize = fitTextFontSize(subtitle, { maxFont: 54, minFont: 38, boxWidth: 880, maxLines: 3 });
+
+  return enforceFixedCanvasHtml(`<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      width: 1145px;
+      height: 1529px;
+      overflow: hidden;
+      font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
+      color: #ffffff;
+    }
+    .cover-root {
+      position: relative;
+      width: 1145px;
+      height: 1529px;
+      overflow: hidden;
+      padding: 104px 96px 118px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      background: #111827;
+      isolation: isolate;
+    }
+    .cover-bg-canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 0;
+    }
+    .cover-shade {
+      position: absolute;
+      inset: 0;
+      z-index: 1;
+      background:
+        linear-gradient(180deg, rgba(2, 6, 23, .48) 0%, rgba(2, 6, 23, .10) 38%, rgba(2, 6, 23, .58) 100%),
+        linear-gradient(90deg, rgba(2, 6, 23, .50) 0%, rgba(2, 6, 23, .06) 58%, rgba(2, 6, 23, .30) 100%);
+    }
+    .top, .main, .bottom {
+      position: relative;
+      z-index: 2;
+    }
+    .top {
+      display: flex;
+      justify-content: space-between;
+      gap: 28px;
+      align-items: center;
+    }
+    .badge {
+      padding: 18px 28px;
+      border-radius: 8px;
+      background: rgba(255,255,255,.94);
+      color: #111827;
+      font-size: 38px;
+      line-height: 1;
+      font-weight: 900;
+    }
+    .time {
+      font-size: 54px;
+      line-height: 1.1;
+      font-weight: 900;
+      text-align: right;
+      text-shadow: 0 4px 18px rgba(0,0,0,.45);
+    }
+    .main {
+      padding: 90px 0 130px;
+    }
+    h1 {
+      margin: 0;
+      max-height: 620px;
+      overflow: hidden;
+      font-size: ${headlineSize}px;
+      line-height: 1.08;
+      letter-spacing: 0;
+      font-weight: 900;
+      text-shadow: 0 8px 34px rgba(0,0,0,.55);
+    }
+    .subtitle {
+      margin-top: 44px;
+      max-height: 230px;
+      overflow: hidden;
+      font-size: ${subtitleSize}px;
+      line-height: 1.32;
+      font-weight: 800;
+      color: rgba(255,255,255,.92);
+      text-shadow: 0 5px 22px rgba(0,0,0,.55);
+    }
+    .bottom {
+      display: flex;
+      justify-content: space-between;
+      align-items: end;
+      gap: 28px;
+      border-top: 4px solid rgba(255,255,255,.72);
+      padding-top: 34px;
+      font-size: 34px;
+      line-height: 1.32;
+      font-weight: 800;
+      color: rgba(255,255,255,.90);
+      text-shadow: 0 3px 14px rgba(0,0,0,.55);
+    }
+  </style>
+</head>
+<body>
+  <div class="cover-root">
+    <canvas class="cover-bg-canvas" width="1145" height="1529" data-background-src="${escapeHtml(backgroundDataUrl)}"></canvas>
+    <div class="cover-shade"></div>
+    <div class="top">
+      <div class="badge">财经资讯</div>
+      <div class="time">${escapeHtml(timestamp)}</div>
+    </div>
+    <main class="main">
+      <h1>${escapeHtml(headline)}</h1>
+      <div class="subtitle">${escapeHtml(visualText(subtitle, 42))}</div>
+    </main>
+    <div class="bottom">
+      <span>公开资讯整理</span>
+      <span>非投资建议</span>
+    </div>
+  </div>
+</body>
+</html>`, { width: 1145, height: 1529 });
+}
+
 function renderSceneHtml(
   content: Omit<GeneratedContent, 'sourceArticles' | 'outputDir' | 'files'>,
   scene: ScenePlan,
-  index: number
+  index: number,
+  backgroundDataUrl?: string
 ): string {
   const sceneTitle = displayText(scene.title);
   const sceneCaption = displayText(getSceneCaptionTitle(scene));
@@ -1002,7 +1314,8 @@ function renderSceneHtml(
   const narrationSize = fitTextFontSize(sceneNarration, { maxFont: 38, minFont: 28, boxWidth: 780, maxLines: 12 });
 
   return baseHtml(`
-    <div class="scene">
+    <div class="scene${backgroundDataUrl ? ' has-ai-background' : ''}">
+      ${backgroundDataUrl ? `<canvas class="ai-background-canvas" width="1080" height="1920" data-background-src="${escapeHtml(backgroundDataUrl)}"></canvas><div class="ai-background-shade"></div>` : ''}
       <div class="scene-head">
         <div class="scene-index">${String(index + 1).padStart(2, '0')}</div>
         <div>
@@ -1046,6 +1359,7 @@ function baseHtml(body: string): string {
       background: #f4f7fb;
     }
     .cover, .scene {
+      position: relative;
       width: 1080px;
       height: 1920px;
       overflow: hidden;
@@ -1057,6 +1371,31 @@ function baseHtml(body: string): string {
         linear-gradient(135deg, rgba(22,119,255,.12), rgba(16,185,129,.10)),
         radial-gradient(circle at 78% 16%, rgba(22,119,255,.18), transparent 28%),
         #f7fafc;
+      isolation: isolate;
+    }
+    .ai-background-canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 0;
+    }
+    .ai-background-shade {
+      position: absolute;
+      inset: 0;
+      z-index: 1;
+      background:
+        linear-gradient(180deg, rgba(2, 6, 23, .46) 0%, rgba(2, 6, 23, .08) 42%, rgba(2, 6, 23, .54) 100%),
+        linear-gradient(90deg, rgba(2, 6, 23, .50) 0%, rgba(2, 6, 23, .04) 54%, rgba(2, 6, 23, .28) 100%);
+    }
+    .cover > :not(.ai-background-canvas):not(.ai-background-shade),
+    .scene > :not(.ai-background-canvas):not(.ai-background-shade) {
+      position: relative;
+      z-index: 2;
+    }
+    .scene.has-ai-background {
+      color: #ffffff;
+      background: #111827;
     }
     .top, .bottom, .scene-footer {
       display: flex;
@@ -1082,6 +1421,10 @@ function baseHtml(body: string): string {
       color: #1677ff;
       font-weight: 700;
       margin-bottom: 34px;
+    }
+    .scene.has-ai-background .scene-kicker {
+      color: #bfdbfe;
+      text-shadow: 0 3px 12px rgba(0,0,0,.45);
     }
     h1 {
       margin: 0;
@@ -1149,6 +1492,10 @@ function baseHtml(body: string): string {
       max-height: 240px;
       overflow: hidden;
     }
+    .scene.has-ai-background h2 {
+      color: #ffffff;
+      text-shadow: 0 6px 26px rgba(0,0,0,.55);
+    }
     .scene-card {
       margin: 42px 0;
       padding: 50px;
@@ -1157,6 +1504,17 @@ function baseHtml(body: string): string {
       border: 3px solid #dbeafe;
       box-shadow: 0 22px 70px rgba(15, 23, 42, .10);
       overflow: hidden;
+    }
+    .scene.has-ai-background .scene-card {
+      background: rgba(255,255,255,.78);
+      border-color: rgba(255,255,255,.52);
+      box-shadow: 0 28px 90px rgba(0,0,0,.34);
+      backdrop-filter: blur(2px);
+    }
+    .scene.has-ai-background .scene-footer {
+      color: rgba(255,255,255,.92);
+      border-top-color: rgba(255,255,255,.60);
+      text-shadow: 0 3px 14px rgba(0,0,0,.50);
     }
     .caption {
       font-size: 46px;
@@ -1239,6 +1597,7 @@ async function renderHtmlImage(
   size: RenderSize = { width: 1080, height: 1920 }
 ): Promise<void> {
   const fixedHtml = enforceFixedCanvasHtml(html, size);
+  const renderHtmlPath = `${outputPath}.render.html`;
   const win = new BrowserWindow({
     width: size.width,
     height: size.height,
@@ -1250,24 +1609,228 @@ async function renderHtmlImage(
   });
 
   try {
+    await fs.writeFile(renderHtmlPath, fixedHtml, 'utf8');
     win.setContentSize(size.width, size.height);
-    await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(fixedHtml)}`);
+    await win.loadFile(renderHtmlPath);
     await win.webContents.executeJavaScript(`
-      document.documentElement.scrollTop = 0;
-      document.body.scrollTop = 0;
-      document.documentElement.style.overflow = 'hidden';
-      document.body.style.overflow = 'hidden';
-      document.documentElement.style.width = '${size.width}px';
-      document.documentElement.style.height = '${size.height}px';
-      document.body.style.width = '${size.width}px';
-      document.body.style.height = '${size.height}px';
+      (async () => {
+        const loadImage = (src) => new Promise((resolve) => {
+          const image = new Image();
+          image.onload = () => resolve(image);
+          image.onerror = () => resolve(null);
+          image.src = src;
+        });
+        await Promise.all(Array.from(document.querySelectorAll('canvas[data-background-src]')).map(async (canvas) => {
+          const source = canvas.dataset.backgroundSrc;
+          if (!source) return;
+          const image = await loadImage(source);
+          if (!image) return;
+          const context = canvas.getContext('2d');
+          if (!context) return;
+          const canvasWidth = canvas.width || canvas.clientWidth;
+          const canvasHeight = canvas.height || canvas.clientHeight;
+          const imageWidth = image.naturalWidth || image.width;
+          const imageHeight = image.naturalHeight || image.height;
+          const scale = Math.max(canvasWidth / imageWidth, canvasHeight / imageHeight);
+          const drawWidth = imageWidth * scale;
+          const drawHeight = imageHeight * scale;
+          const drawX = (canvasWidth - drawWidth) / 2;
+          const drawY = (canvasHeight - drawHeight) / 2;
+          context.clearRect(0, 0, canvasWidth, canvasHeight);
+          context.drawImage(image, drawX, drawY, drawWidth, drawHeight);
+        }));
+        await Promise.all(Array.from(document.images).map((img) => {
+          if (img.complete) return true;
+          return new Promise((resolve) => {
+            img.onload = resolve;
+            img.onerror = resolve;
+          });
+        }));
+        document.documentElement.scrollTop = 0;
+        document.body.scrollTop = 0;
+        document.documentElement.style.overflow = 'hidden';
+        document.body.style.overflow = 'hidden';
+        document.documentElement.style.width = '${size.width}px';
+        document.documentElement.style.height = '${size.height}px';
+        document.body.style.width = '${size.width}px';
+        document.body.style.height = '${size.height}px';
+      })();
     `);
     await new Promise((resolve) => setTimeout(resolve, 250));
     const image = await win.webContents.capturePage({ x: 0, y: 0, width: size.width, height: size.height });
     await fs.writeFile(outputPath, image.toPNG());
   } finally {
     win.destroy();
+    await fs.unlink(renderHtmlPath).catch(() => undefined);
   }
+}
+
+async function imageFileToDataUrl(filePath: string): Promise<string> {
+  const buffer = await fs.readFile(filePath);
+  return `data:${detectImageMime(buffer)};base64,${buffer.toString('base64')}`;
+}
+
+function detectImageMime(buffer: Buffer): string {
+  if (buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
+    return 'image/png';
+  }
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return 'image/jpeg';
+  }
+  if (buffer.length >= 12 && buffer.subarray(0, 4).toString('ascii') === 'RIFF' && buffer.subarray(8, 12).toString('ascii') === 'WEBP') {
+    return 'image/webp';
+  }
+  return 'image/png';
+}
+
+function buildCoverAiImagePrompt(
+  content: Omit<GeneratedContent, 'sourceArticles' | 'outputDir' | 'files'>
+): string {
+  return cleanAiImagePrompt([
+    '专业财经资讯封面背景图，金融新闻视觉，高清商业摄影质感',
+    '画面主题：' + sanitizeText(content.coverDescription || content.publishTitle || content.summary),
+    '全球市场数据屏幕、交易大厅、宏观经济仪表盘、科技与商品市场意象',
+    '克制现代的财经媒体风格，主体偏向两侧或远景，中心区域开阔低细节，边缘保留丰富金融场景细节'
+  ].join('，'), '专业财经新闻背景图，全球市场数据屏幕，现代交易大厅，高清商业摄影质感，主体偏侧，中心开阔低细节');
+}
+
+function buildSceneAiImagePrompt(scene: ScenePlan, index: number): string {
+  return cleanAiImagePrompt([
+    `专业财经新闻分镜背景图，序号 ${index + 1}`,
+    `主题：${sanitizeText(scene.caption || scene.title)}`,
+    `画面说明：${sanitizeText(scene.imagePrompt || scene.narration)}`,
+    '现代财经媒体风格，宏观市场氛围，数据可视化元素，真实质感，主体放在两侧或远景，中心区域开阔低细节'
+  ].join('，'), '专业财经新闻背景图，宏观市场数据屏幕，真实质感，主体偏侧，中心开阔低细节');
+}
+
+function cleanAiImagePrompt(input: unknown, fallback: string): string {
+  let output = sanitizeText(String(input ?? '').trim());
+  for (const pattern of AI_IMAGE_PROMPT_BANNED_PATTERNS) {
+    output = output.replace(pattern, '');
+  }
+  output = output
+    .replace(/不要|避免|禁止|不能|不可|无/g, '')
+    .replace(/\s+/g, ' ')
+    .replace(/[，,、；;。]{2,}/g, '，')
+    .replace(/^[，,、；;。]+|[，,、；;。]+$/g, '')
+    .trim();
+
+  return output || fallback;
+}
+
+async function renderDashscopeTextToImage(
+  promptText: string,
+  outputPath: string,
+  config: AppRuntimeConfig,
+  label: string,
+  percent: number
+): Promise<void> {
+  if (!config.alibabaDashscopeApiKey) {
+    throw new Error('没有配置 DashScope Key，无法生成 AI 图片。');
+  }
+
+  const createResponse = await fetchWithTimeout('https://dashscope.aliyuncs.com/api/v1/services/aigc/image-generation/generation', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${config.alibabaDashscopeApiKey}`,
+      'Content-Type': 'application/json',
+      'X-DashScope-Async': 'enable'
+    },
+    body: JSON.stringify({
+      model: config.dashscopeImageModel,
+      input: {
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                text: promptText
+              }
+            ]
+          }
+        ]
+      },
+      parameters: {
+        size: config.dashscopeImageSize,
+        n: 1,
+        prompt_extend: false,
+        watermark: false,
+        negative_prompt: '文字，水印，二维码，股票代码，股票名称，买入，卖出，收益承诺，低清晰度，畸形图表'
+      }
+    })
+  }, DASHSCOPE_IMAGE_TIMEOUT_MS);
+
+  if (!createResponse.ok) {
+    const detail = await createResponse.text().catch(() => '');
+    throw new Error(`${config.dashscopeImageModel}: ${createResponse.status} ${createResponse.statusText} ${detail}`);
+  }
+
+  const created = await createResponse.json() as any;
+  const immediateUrl = extractDashscopeImageUrl(created);
+  const imageUrl = immediateUrl || await waitForDashscopeImage(created, config, label, percent);
+  if (!imageUrl) {
+    throw new Error(`${label} 文生图任务未返回图片地址`);
+  }
+
+  const imageResponse = await fetchWithTimeout(imageUrl, {}, DASHSCOPE_IMAGE_TIMEOUT_MS);
+  if (!imageResponse.ok) {
+    throw new Error(`${label} 图片下载失败：${imageResponse.status} ${imageResponse.statusText}`);
+  }
+
+  await fs.writeFile(outputPath, Buffer.from(await imageResponse.arrayBuffer()));
+}
+
+async function waitForDashscopeImage(
+  created: any,
+  config: AppRuntimeConfig,
+  label: string,
+  percent: number
+): Promise<string | undefined> {
+  const taskId = created?.output?.task_id ?? created?.output?.taskId ?? created?.task_id;
+  if (!taskId) {
+    throw new Error(`${label} 文生图任务没有返回 task_id`);
+  }
+
+  const maxAttempts = Math.ceil(DASHSCOPE_IMAGE_TIMEOUT_MS / DASHSCOPE_IMAGE_POLL_INTERVAL_MS);
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    progress('image', `${label} AI image polling ${attempt}/${maxAttempts}`, percent);
+    await new Promise((resolve) => setTimeout(resolve, DASHSCOPE_IMAGE_POLL_INTERVAL_MS));
+    const response = await fetchWithTimeout(`https://dashscope.aliyuncs.com/api/v1/tasks/${taskId}`, {
+      headers: {
+        Authorization: `Bearer ${config.alibabaDashscopeApiKey}`
+      }
+    }, DASHSCOPE_IMAGE_TIMEOUT_MS);
+
+    if (!response.ok) {
+      throw new Error(`${label} 文生图任务查询失败：${response.status} ${response.statusText}`);
+    }
+
+    const payload = await response.json() as any;
+    const imageUrl = extractDashscopeImageUrl(payload);
+    if (imageUrl) return imageUrl;
+
+    const status = String(payload?.output?.task_status ?? payload?.output?.taskStatus ?? '').toUpperCase();
+    if (status === 'FAILED' || status === 'CANCELED' || status === 'UNKNOWN') {
+      throw new Error(`${label} 文生图任务失败：${payload?.output?.message ?? payload?.message ?? status}`);
+    }
+  }
+
+  throw new Error(`${label} 文生图任务超时`);
+}
+
+function extractDashscopeImageUrl(payload: any): string | undefined {
+  const choices = Array.isArray(payload?.output?.choices) ? payload.output.choices : [];
+  for (const choice of choices) {
+    const content = Array.isArray(choice?.message?.content) ? choice.message.content : [];
+    for (const item of content) {
+      const image = item?.image ?? item?.url ?? item?.image_url;
+      if (typeof image === 'string' && image) return image;
+    }
+  }
+
+  const result = payload?.output?.results?.[0] ?? payload?.output?.result ?? payload?.result;
+  const url = result?.url ?? result?.image_url ?? payload?.output?.url ?? payload?.output?.image_url;
+  return typeof url === 'string' && url ? url : undefined;
 }
 
 async function renderSceneAudios(

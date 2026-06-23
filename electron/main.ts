@@ -239,6 +239,9 @@ function normalizeRuntimeConfig(input: Partial<AppRuntimeConfig>): AppRuntimeCon
     deepseekCoverTemperature: clampNumber(input.deepseekCoverTemperature, 0, 2, DEFAULT_APP_CONFIG.deepseekCoverTemperature),
     dashscopeTtsModel: cleanString(input.dashscopeTtsModel, DEFAULT_APP_CONFIG.dashscopeTtsModel),
     dashscopeTtsVoice: cleanString(input.dashscopeTtsVoice, DEFAULT_APP_CONFIG.dashscopeTtsVoice),
+    enableAiImages: typeof input.enableAiImages === 'boolean' ? input.enableAiImages : DEFAULT_APP_CONFIG.enableAiImages,
+    dashscopeImageModel: normalizeDashscopeImageModel(cleanString(input.dashscopeImageModel, DEFAULT_APP_CONFIG.dashscopeImageModel)),
+    dashscopeImageSize: normalizeDashscopeImageSize(cleanString(input.dashscopeImageSize, DEFAULT_APP_CONFIG.dashscopeImageSize)),
     ttsTimeoutMs: Math.round(clampNumber(input.ttsTimeoutMs, 5000, 180000, DEFAULT_APP_CONFIG.ttsTimeoutMs)),
     contentPrompt: cleanString(input.contentPrompt, DEFAULT_APP_CONFIG.contentPrompt),
     scriptSystemPrompt: cleanString(input.scriptSystemPrompt, DEFAULT_APP_CONFIG.scriptSystemPrompt),
@@ -285,4 +288,18 @@ function normalizeDeepseekModel(model: string): string {
     return DEFAULT_APP_CONFIG.deepseekScriptModel;
   }
   return model;
+}
+
+function normalizeDashscopeImageModel(model: string): string {
+  if (model === 'wanx2.1-t2i-turbo') {
+    return DEFAULT_APP_CONFIG.dashscopeImageModel;
+  }
+  return model;
+}
+
+function normalizeDashscopeImageSize(size: string): string {
+  if (size === '720*1280') {
+    return DEFAULT_APP_CONFIG.dashscopeImageSize;
+  }
+  return size;
 }

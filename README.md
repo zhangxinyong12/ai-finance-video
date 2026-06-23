@@ -38,7 +38,7 @@ pnpm run build
 - Marketaux API Key：用于抓取海外财经新闻。
 - NewsAPI Key：可选，用于补充新闻源。
 - DeepSeek API Key：用于生成新闻分析脚本和封面 HTML。
-- DashScope 语音 Key：用于生成固定声音口播音频。
+- DashScope 语音 Key：用于生成固定声音口播音频；如果开启 AI 生成图片，也用于阿里文生图。
 
 申请入口：
 
@@ -81,6 +81,7 @@ pnpm run build
 - 脚本温度和封面温度。
 - DashScope TTS 模型，默认 `qwen3-tts-flash`。
 - DashScope 声音，默认 `Cherry`。
+- AI 生成图片开关，默认关闭；开启后使用 DashScope 文生图生成 9:16 竖图，模型默认 `wan2.6-t2i`，尺寸固定 `960*1696`。
 - TTS 请求超时。
 - 新闻资讯分析提示词。
 - 脚本 system prompt。

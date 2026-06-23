@@ -19,6 +19,9 @@ export interface AppRuntimeConfig {
   deepseekCoverTemperature: number;
   dashscopeTtsModel: string;
   dashscopeTtsVoice: string;
+  enableAiImages: boolean;
+  dashscopeImageModel: string;
+  dashscopeImageSize: string;
   ttsTimeoutMs: number;
   contentPrompt: string;
   scriptSystemPrompt: string;
