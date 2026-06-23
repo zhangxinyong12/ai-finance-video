@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-electron/
+release/
+out/
+
+# Local Electron/runtime data
+.electron-user-data/
+outputs/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Local environment and secrets
+.env
+.env.*
+*.local
+*.secret
+secrets.*
+finance-video-config.json
+finance-video-config.local.json
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local notes
+环境.md

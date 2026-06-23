@@ -1,0 +1,28 @@
+appId: com.ai.finance.video.studio
+productName: AI财经资讯视频
+directories:
+  buildResources: build
+  output: release
+
+files:
+  - dist-electron/**/*
+  - dist/**/*.{js,html,css,svg,png,ico}
+  - node_modules/**/*
+  - package.json
+  - README.md
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: build/icon.ico
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: AI财经资讯视频
+
+publish: null

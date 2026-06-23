@@ -1,0 +1,41 @@
+{
+  "name": "ai-finance-video-studio",
+  "version": "0.1.0",
+  "description": "AI finance news video studio for compliant short-form media.",
+  "author": "AI Finance Video Studio",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "concurrently \"pnpm run dev:vite\" \"pnpm run dev:electron\" --kill-others",
+    "dev:vite": "vite",
+    "dev:electron": "node esbuild.electron.js && wait-on http://localhost:5848 && electron .",
+    "build:electron": "node esbuild.electron.js",
+    "build": "vite build && pnpm run build:electron && electron-builder",
+    "build:win": "vite build && pnpm run build:electron && electron-builder --win",
+    "start": "pnpm run build:electron && electron ."
+  },
+  "dependencies": {
+    "@ant-design/icons": "^6.2.3",
+    "antd": "^5.22.2",
+    "dayjs": "^1.11.13",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "@types/react": "^19.2.15",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.0",
+    "electron": "^30.0.0",
+    "electron-builder": "^25.1.8",
+    "esbuild": "^0.24.2",
+    "typescript": "^6.0.3",
+    "vite": "^5.4.11",
+    "wait-on": "^8.0.1"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron"
+    ]
+  }
+}
