@@ -707,6 +707,7 @@ function normalizeGeneratedJson(value: any): Omit<GeneratedContent, 'sourceArtic
 function sanitizeGeneratedContent(
   content: Omit<GeneratedContent, 'sourceArticles' | 'outputDir' | 'files'>
 ): Omit<GeneratedContent, 'sourceArticles' | 'outputDir' | 'files'> {
+  const hashtags = safeArray(content.hashtags).map((tag) => sanitizeHashtag(tag)).filter(Boolean).slice(0, 8);
   const scenes = safeScenes(content.scenes).map((scene) => ({
     title: sanitizeText(scene.title),
     narration: sanitizeText(scene.narration),
@@ -717,8 +718,8 @@ function sanitizeGeneratedContent(
   return {
     videoTitle: sanitizeText(content.videoTitle),
     publishTitle: limitChars(sanitizeText(content.publishTitle), 30),
-    publishContent: limitChars(sanitizeText(content.publishContent), 1000),
-    hashtags: safeArray(content.hashtags).map((tag) => sanitizeHashtag(tag)).filter(Boolean).slice(0, 8),
+    publishContent: appendHashtagsToPublishContent(sanitizeText(content.publishContent), hashtags, 1000),
+    hashtags,
     coverDescription: sanitizeText(content.coverDescription),
     summary: sanitizeText(content.summary),
     disclaimer: '本内容仅为公开资讯整理，不构成任何投资建议。',
@@ -743,6 +744,26 @@ function sanitizeText(input: string): string {
 
 function sanitizeHashtag(input: string): string {
   return sanitizeText(input).replace(/^#+/, '').replace(/\s+/g, '');
+}
+
+function appendHashtagsToPublishContent(content: string, hashtags: string[], maxChars: number): string {
+  const cleanContent = String(content ?? '').trim();
+  const tags = Array.from(new Set(
+    hashtags
+      .map((tag) => sanitizeHashtag(tag))
+      .filter(Boolean)
+      .map((tag) => `#${tag}`)
+  )).filter((tag) => !cleanContent.includes(tag));
+
+  if (tags.length === 0) return limitChars(cleanContent, maxChars);
+
+  const suffix = tags.join(' ');
+  const separator = cleanContent ? '\n\n' : '';
+  const suffixLength = Array.from(separator + suffix).length;
+  const availableContentChars = maxChars - suffixLength;
+
+  if (availableContentChars <= 0) return limitChars(suffix, maxChars);
+  return `${limitChars(cleanContent, availableContentChars)}${separator}${suffix}`.trim();
 }
 
 function limitChars(input: string, maxChars: number): string {

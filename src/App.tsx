@@ -862,6 +862,8 @@ export default function App() {
 }
 
 function PublishPreview({ content }: { content: GeneratedContent }) {
+  const publishContent = appendHashtagsToPublishContent(content.publishContent, content.hashtags ?? [], 1000);
+
   return (
     <Space direction="vertical" size={14} className="full-width">
       <div>
@@ -869,8 +871,8 @@ function PublishPreview({ content }: { content: GeneratedContent }) {
         <Paragraph copyable strong>{content.publishTitle}</Paragraph>
       </div>
       <div>
-        <Text type="secondary">作品简介（{Array.from(content.publishContent ?? '').length}/1000）</Text>
-        <Paragraph copyable>{content.publishContent}</Paragraph>
+        <Text type="secondary">作品简介（{Array.from(publishContent).length}/1000，已包含标签）</Text>
+        <Paragraph copyable>{publishContent}</Paragraph>
       </div>
       <div>
         <Text type="secondary">标签</Text>
@@ -910,4 +912,29 @@ function sameStringSet(left: string[], right: string[]): boolean {
   const rightSet = new Set(right);
   if (leftSet.size !== rightSet.size) return false;
   return Array.from(leftSet).every((item) => rightSet.has(item));
+}
+
+function appendHashtagsToPublishContent(content: string, hashtags: string[], maxChars: number): string {
+  const cleanContent = String(content ?? '').trim();
+  const tags = Array.from(new Set(
+    hashtags
+      .map((tag) => String(tag ?? '').replace(/^#+/, '').replace(/\s+/g, '').trim())
+      .filter(Boolean)
+      .map((tag) => `#${tag}`)
+  )).filter((tag) => !cleanContent.includes(tag));
+
+  if (tags.length === 0) return limitChars(cleanContent, maxChars);
+
+  const suffix = tags.join(' ');
+  const separator = cleanContent ? '\n\n' : '';
+  const suffixLength = Array.from(separator + suffix).length;
+  const availableContentChars = maxChars - suffixLength;
+
+  if (availableContentChars <= 0) return limitChars(suffix, maxChars);
+  return `${limitChars(cleanContent, availableContentChars)}${separator}${suffix}`.trim();
+}
+
+function limitChars(input: string, maxChars: number): string {
+  const chars = Array.from(String(input ?? '').trim());
+  return chars.length > maxChars ? chars.slice(0, maxChars).join('') : chars.join('');
 }
