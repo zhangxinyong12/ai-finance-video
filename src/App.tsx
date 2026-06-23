@@ -37,6 +37,7 @@ import {
   ReloadOutlined,
   SaveOutlined,
   SettingOutlined,
+  WechatOutlined,
   VideoCameraOutlined
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
@@ -58,6 +59,7 @@ import {
   shellAPI,
   systemAPI
 } from './services/electronAPI';
+import wechatImage from './img/wechat.jpg';
 
 const { Header, Content, Sider } = Layout;
 const { Text, Title, Paragraph } = Typography;
@@ -126,7 +128,8 @@ const sourceColumns: ColumnsType<NewsArticle> = [
 const menuItems = [
   { key: 'generate', icon: <PlayCircleOutlined />, label: '生成任务' },
   { key: 'settings', icon: <SettingOutlined />, label: '接口与模型' },
-  { key: 'history', icon: <HistoryOutlined />, label: '历史' }
+  { key: 'history', icon: <HistoryOutlined />, label: '历史' },
+  { key: 'contact', icon: <WechatOutlined />, label: '联系我' }
 ];
 
 export default function App() {
@@ -143,10 +146,18 @@ export default function App() {
   const [selectedExecution, setSelectedExecution] = useState<ExecutionItem | null>(null);
   const [previewAssets, setPreviewAssets] = useState<PreviewAssets>({});
   const [assetLoading, setAssetLoading] = useState(false);
+  const watchedNewsProviders = Form.useWatch('newsProviders', configForm);
+  const selectedNewsProviders = Array.isArray(watchedNewsProviders)
+    ? watchedNewsProviders
+    : config?.settings.newsProviders ?? [];
+  const newsProvidersChanged = Boolean(
+    config && Array.isArray(watchedNewsProviders) && !sameStringSet(watchedNewsProviders, config.settings.newsProviders)
+  );
 
   const hasUsableNewsSource = useMemo(() => {
     const providers = config?.settings.newsProviders ?? [];
     return (providers.includes('marketaux') && Boolean(config?.hasMarketauxApiKey))
+      || providers.includes('marketWatch')
       || (providers.includes('newsApi') && Boolean(config?.hasNewsApiKey));
   }, [config]);
   const apiReady = useMemo(
@@ -345,6 +356,11 @@ export default function App() {
     message.success('历史记录和本地文件已清空');
   }
 
+  function newsProviderStatus(provider: string): string {
+    if (!selectedNewsProviders.includes(provider)) return '未启用';
+    return newsProvidersChanged ? '待保存' : '已启用';
+  }
+
   return (
     <Layout className="app-shell">
       <Sider className="app-sider" width={220}>
@@ -447,6 +463,9 @@ export default function App() {
                         <Statistic title="Marketaux" value={config?.hasMarketauxApiKey ? '已配置' : '缺失'} prefix={<ApiOutlined />} />
                       </Col>
                       <Col span={12}>
+                        <Statistic title="MarketWatch" value={newsProviderStatus('marketWatch')} prefix={<ApiOutlined />} />
+                      </Col>
+                      <Col span={12}>
                         <Statistic title="NewsAPI" value={config?.hasNewsApiKey ? '已配置' : '缺失'} prefix={<ApiOutlined />} />
                       </Col>
                       <Col span={12}>
@@ -500,8 +519,16 @@ export default function App() {
           {activeKey === 'settings' && (
             <Row gutter={[16, 16]}>
               <Col xs={24} xl={16}>
-                <Card title="接口与模型" className="panel-card">
+                  <Card title="接口与模型" className="panel-card">
                   <Form form={configForm} layout="vertical" onFinish={saveRuntimeConfig}>
+                    {newsProvidersChanged && (
+                      <Alert
+                        type="warning"
+                        showIcon
+                        message="新闻源配置已修改，点击底部“保存配置”后生效。"
+                        style={{ marginBottom: 16 }}
+                      />
+                    )}
                     <Form.Item
                       name="newsProviders"
                       label="新闻源"
@@ -510,6 +537,7 @@ export default function App() {
                       <Checkbox.Group
                         options={[
                           { label: 'Marketaux', value: 'marketaux' },
+                          { label: 'MarketWatch RSS（无需 Key）', value: 'marketWatch' },
                           { label: 'NewsAPI', value: 'newsApi' }
                         ]}
                       />
@@ -615,7 +643,8 @@ export default function App() {
                       <Input.TextArea rows={4} />
                     </Form.Item>
 
-                    <div className="config-actions">
+                    <div className="config-actions settings-actions">
+                      <Text type="secondary">修改配置后点击保存才会生效</Text>
                       <Button type="primary" htmlType="submit" icon={<SaveOutlined />} loading={savingConfig} size="large">
                         保存配置
                       </Button>
@@ -629,6 +658,9 @@ export default function App() {
                     <Row gutter={[12, 12]}>
                       <Col span={12}>
                         <Statistic title="Marketaux" value={config?.hasMarketauxApiKey ? '已配置' : '缺失'} prefix={<ApiOutlined />} />
+                      </Col>
+                      <Col span={12}>
+                        <Statistic title="MarketWatch" value={newsProviderStatus('marketWatch')} prefix={<ApiOutlined />} />
                       </Col>
                       <Col span={12}>
                         <Statistic title="NewsAPI" value={config?.hasNewsApiKey ? '已配置' : '缺失'} prefix={<ApiOutlined />} />
@@ -646,7 +678,7 @@ export default function App() {
                       type="info"
                       showIcon
                       message="仅保存在用户本地"
-                      description="API Key 只会保存到当前电脑的应用本地配置中，不会上传到我们的云端。生成内容时，Key 仅用于请求 Marketaux、NewsAPI、DeepSeek 和 DashScope 对应服务。"
+                      description="API Key 只会保存到当前电脑的应用本地配置中，不会上传到我们的云端。生成内容时，Key 仅用于请求 Marketaux、NewsAPI、DeepSeek 和 DashScope 对应服务；MarketWatch RSS 不需要 Key。"
                     />
                   </Card>
                 </Space>
@@ -721,6 +753,14 @@ export default function App() {
               )}
             </Card>
           )}
+
+          {activeKey === 'contact' && (
+            <Card title="联系我" className="panel-card contact-card">
+              <div className="contact-panel">
+                <img className="wechat-image" src={wechatImage} alt="微信二维码" />
+              </div>
+            </Card>
+          )}
         </Content>
       </Layout>
 
@@ -792,13 +832,23 @@ export default function App() {
                 key: 'sources',
                 label: '新闻来源',
                 children: (
-                  <Table
-                    rowKey={(record, index) => record.uuid || record.url || `${record.title}-${index}`}
-                    dataSource={selectedExecution.content.sourceArticles ?? []}
-                    columns={sourceColumns}
-                    pagination={{ pageSize: 5 }}
-                    size="small"
-                  />
+                  <Space direction="vertical" size={12} className="full-width">
+                    {(selectedExecution.content.sourceWarnings ?? []).length > 0 && (
+                      <Alert
+                        type="warning"
+                        showIcon
+                        message="部分新闻源本次未返回可用数据"
+                        description={(selectedExecution.content.sourceWarnings ?? []).join('；')}
+                      />
+                    )}
+                    <Table
+                      rowKey={(record, index) => record.uuid || record.url || `${record.title}-${index}`}
+                      dataSource={selectedExecution.content.sourceArticles ?? []}
+                      columns={sourceColumns}
+                      pagination={{ pageSize: 5 }}
+                      size="small"
+                    />
+                  </Space>
                 )
               }
             ]}
@@ -853,4 +903,11 @@ function readHistory(): ExecutionItem[] {
   } catch {
     return [];
   }
+}
+
+function sameStringSet(left: string[], right: string[]): boolean {
+  const leftSet = new Set(left);
+  const rightSet = new Set(right);
+  if (leftSet.size !== rightSet.size) return false;
+  return Array.from(leftSet).every((item) => rightSet.has(item));
 }

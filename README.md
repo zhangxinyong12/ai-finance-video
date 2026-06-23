@@ -75,7 +75,7 @@ pnpm run build
 
 “接口与模型”页面支持配置：
 
-- 新闻源多选：Marketaux、NewsAPI。
+- 新闻源多选：Marketaux、MarketWatch RSS（无需 Key）、NewsAPI。
 - DeepSeek 新闻分析/脚本模型，默认 `deepseek-v4-pro`。
 - DeepSeek 封面 HTML 模型，默认 `deepseek-v4-pro`。
 - 脚本温度和封面温度。

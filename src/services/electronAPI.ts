@@ -18,7 +18,7 @@ const fallback = {
       hasAlibabaDashscopeApiKey: false,
       defaultOutputDir: '',
       settings: {
-        newsProviders: ['marketaux', 'newsApi'],
+        newsProviders: ['marketaux', 'marketWatch', 'newsApi'],
         deepseekScriptModel: 'deepseek-v4-pro',
         deepseekCoverModel: 'deepseek-v4-pro',
         deepseekScriptTemperature: 0.45,

@@ -124,11 +124,14 @@ body {
 
 .config-actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
+  gap: 12px;
   padding-top: 4px;
 }
 
-.generate-actions {
+.generate-actions,
+.settings-actions {
   position: sticky;
   bottom: -20px;
   z-index: 15;
@@ -138,6 +141,10 @@ body {
   border-top: 1px solid #e5e7eb;
   box-shadow: 0 -10px 24px rgba(15, 23, 42, 0.06);
   backdrop-filter: blur(8px);
+}
+
+.settings-actions {
+  justify-content: space-between;
 }
 
 .inline-link-button {
@@ -211,4 +218,27 @@ body {
 
 .video-preview {
   aspect-ratio: 9 / 16;
+}
+
+.contact-card .ant-card-body {
+  min-height: calc(100vh - 180px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.contact-panel {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
+
+.wechat-image {
+  width: min(520px, 100%);
+  max-height: calc(100vh - 240px);
+  object-fit: contain;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
+  box-shadow: 0 14px 36px rgba(15, 23, 42, 0.12);
 }

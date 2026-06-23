@@ -69,6 +69,7 @@ export interface GeneratedContent {
   disclaimer: string;
   scenes: ScenePlan[];
   sourceArticles: NewsArticle[];
+  sourceWarnings?: string[];
   outputDir: string;
   files: string[];
 }
@@ -85,6 +86,11 @@ interface MarketauxResponse {
 
 interface NewsApiResponse {
   articles?: Array<Record<string, any>>;
+}
+
+interface FinanceNewsResult {
+  articles: NewsArticle[];
+  warnings: string[];
 }
 
 interface SaveResult {
@@ -148,7 +154,7 @@ export const DEFAULT_COVER_PROMPT_EXTRA = [
 ].join('\n');
 
 export const DEFAULT_APP_CONFIG: AppRuntimeConfig = {
-  newsProviders: ['marketaux', 'newsApi'],
+  newsProviders: ['marketaux', 'marketWatch', 'newsApi'],
   deepseekScriptModel: 'deepseek-v4-pro',
   deepseekCoverModel: 'deepseek-v4-pro',
   deepseekScriptTemperature: 0.45,
@@ -239,12 +245,12 @@ export async function fetchMarketauxNews(
 export async function fetchFinanceNews(
   request: GenerationRequest,
   config: AppRuntimeConfig
-): Promise<NewsArticle[]> {
+): Promise<FinanceNewsResult> {
   const freshnessHours = Math.max(1, Math.min(Number.isFinite(request.maxNewsAgeHours) ? request.maxNewsAgeHours : 24, 168));
   const publishedAfter = new Date(Date.now() - freshnessHours * 60 * 60 * 1000);
   const providers = new Set(config.newsProviders.length > 0 ? config.newsProviders : DEFAULT_APP_CONFIG.newsProviders);
   const articles: NewsArticle[] = [];
-  const errors: string[] = [];
+  const warnings: string[] = [];
 
   if (providers.has('marketaux') && config.marketauxApiKey) {
     try {
@@ -256,7 +262,18 @@ export async function fetchFinanceNews(
         config.marketauxApiKey
       ));
     } catch (error) {
-      errors.push(`Marketaux: ${error instanceof Error ? error.message : String(error)}`);
+      warnings.push(`Marketaux: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  if (providers.has('marketWatch')) {
+    try {
+      articles.push(...await fetchMarketWatchNews(
+        request.maxArticles,
+        publishedAfter
+      ));
+    } catch (error) {
+      warnings.push(`MarketWatch: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -270,7 +287,7 @@ export async function fetchFinanceNews(
         config.newsApiKey
       ));
     } catch (error) {
-      errors.push(`NewsAPI: ${error instanceof Error ? error.message : String(error)}`);
+      warnings.push(`NewsAPI: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -278,11 +295,11 @@ export async function fetchFinanceNews(
     .filter((article) => isArticleAfter(article, publishedAfter))
     .slice(0, Math.max(1, Math.min(request.maxArticles, 40)));
 
-  if (result.length === 0 && errors.length > 0) {
-    throw new Error(`新闻源请求失败或无可用新闻：${errors.join('；')}`);
+  if (result.length === 0 && warnings.length > 0) {
+    throw new Error(`新闻源请求失败或无可用新闻：${warnings.join('；')}`);
   }
 
-  return result;
+  return { articles: result, warnings };
 }
 
 function buildSearchQueries(topic: string, requestRounds: number): string[] {
@@ -328,6 +345,29 @@ async function fetchMarketauxRound(search: string, limit: number, publishedAfter
       ? item.entities.map((entity: any) => entity.name).filter(Boolean)
       : undefined
   })).filter((item) => item.title);
+}
+
+async function fetchMarketWatchNews(
+  maxArticles: number,
+  publishedAfter: Date
+): Promise<NewsArticle[]> {
+  progress('news', 'Fetching MarketWatch RSS', 24);
+  const response = await fetchWithTimeout('https://feeds.content.dowjones.io/public/rss/mw_topstories', {
+    headers: {
+      'User-Agent': 'Mozilla/5.0'
+    }
+  }, 20000);
+  if (!response.ok) {
+    throw new Error(`${response.status} ${response.statusText}`);
+  }
+
+  const xml = await response.text();
+  return parseRssArticles(xml, {
+    provider: 'MarketWatch RSS',
+    fallbackSource: 'marketwatch.com'
+  })
+    .filter((article) => isArticleAfter(article, publishedAfter))
+    .slice(0, Math.max(1, Math.min(maxArticles, 20)));
 }
 
 async function fetchNewsApi(
@@ -398,6 +438,57 @@ function isArticleAfter(article: NewsArticle, publishedAfter: Date): boolean {
   return Number.isFinite(publishedAt) && publishedAt >= publishedAfter.getTime();
 }
 
+function parseRssArticles(
+  xml: string,
+  options: { provider: string; fallbackSource: string }
+): NewsArticle[] {
+  const items = xml.match(/<item\b[\s\S]*?<\/item>/gi) ?? [];
+  return items.map((item) => {
+    const link = decodeXmlText(extractXmlTag(item, 'link'));
+    const domain = link ? getUrlDomain(link) : '';
+    return {
+      title: decodeXmlText(extractXmlTag(item, 'title')),
+      description: decodeXmlText(stripHtml(extractXmlTag(item, 'description'))),
+      url: link || undefined,
+      source: domain || options.fallbackSource,
+      provider: options.provider,
+      publishedAt: normalizePublishedDate(extractXmlTag(item, 'pubDate'))
+    };
+  }).filter((article) => article.title && article.publishedAt);
+}
+
+function extractXmlTag(xml: string, tag: string): string {
+  const matched = xml.match(new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'i'));
+  return matched?.[1]?.replace(/^<!\[CDATA\[/, '').replace(/\]\]>$/, '').trim() ?? '';
+}
+
+function stripHtml(input: string): string {
+  return String(input ?? '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function decodeXmlText(input: string): string {
+  return String(input ?? '')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .trim();
+}
+
+function normalizePublishedDate(input: string): string | undefined {
+  const value = Date.parse(input);
+  return Number.isFinite(value) ? new Date(value).toISOString() : undefined;
+}
+
+function getUrlDomain(input: string): string {
+  try {
+    return new URL(input).hostname.replace(/^www\./, '');
+  } catch {
+    return '';
+  }
+}
+
 function formatMarketauxDate(date: Date): string {
   return date.toISOString().replace(/\.\d{3}Z$/, '');
 }
@@ -429,26 +520,31 @@ export async function generateContent(
   }
 
   progress('news', 'Fetching broad global finance news', 10);
-  const articles = await fetchFinanceNews(request, config);
+  const news = await fetchFinanceNews(request, config);
+  const { articles } = news;
   if (articles.length === 0) {
     throw new Error(`没有获取到最近 ${request.maxNewsAgeHours ?? 24} 小时内的财经新闻，请换一个更宽泛的英文主题，或检查新闻源配置。`);
   }
 
   progress('script', 'Generating compliant Chinese finance analysis', 50);
   const generated = await generateScriptWithDeepseek(request, articles, config);
+  const generatedWithWarnings = {
+    ...generated,
+    sourceWarnings: news.warnings
+  };
 
   progress('save', 'Saving publish assets and media files', 82);
   const outputDir = await createRunOutputDir(request.outputDir);
   const saved = await saveGeneratedFiles(
     outputDir,
-    generated,
+    generatedWithWarnings,
     articles,
     config
   );
 
   progress('completed', 'Content and video generation completed', 100);
   return {
-    ...generated,
+    ...generatedWithWarnings,
     coverImagePath: saved.coverImagePath,
     audioPath: saved.audioPath,
     videoPath: saved.videoPath,

@@ -248,7 +248,7 @@ function normalizeRuntimeConfig(input: Partial<AppRuntimeConfig>): AppRuntimeCon
 }
 
 function normalizeNewsProviders(value: unknown): string[] {
-  const allowed = new Set(['marketaux', 'newsApi']);
+  const allowed = new Set(['marketaux', 'marketWatch', 'newsApi']);
   const values = Array.isArray(value) ? value.map((item) => String(item)) : DEFAULT_APP_CONFIG.newsProviders;
   const normalized = values.filter((item) => allowed.has(item));
   return normalized.length > 0 ? Array.from(new Set(normalized)) : DEFAULT_APP_CONFIG.newsProviders;

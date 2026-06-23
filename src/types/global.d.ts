@@ -70,6 +70,7 @@ export interface GeneratedContent {
   disclaimer: string;
   scenes: ScenePlan[];
   sourceArticles: NewsArticle[];
+  sourceWarnings?: string[];
   outputDir: string;
   files: string[];
 }
